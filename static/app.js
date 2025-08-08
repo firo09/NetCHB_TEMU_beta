@@ -16,7 +16,7 @@ const fileInput   = document.getElementById('file-input');
 const loadingMsg  = document.getElementById('loading-msg');
 const generateBtn = document.getElementById('generate-btn');
 
-let ruleConfig = [], htsData = [], midData = [];
+let ruleConfig = [], htsData = [], midData = [], pgaRules = [];
 
 // 日期格式化工具，支持 m/d/yyyy, yyyy-mm-dd, mm/dd/yyyy 等
 function formatDateByPattern(date, pattern) {
@@ -33,7 +33,7 @@ function formatDateByPattern(date, pattern) {
     .replace(/d/g, d);
 }
 
-// 只用于mawb sheet提取
+// 只用于 mawb sheet 提取
 function getValueFromMawbSheet(mawbSheetArr, colName) {
   if (!Array.isArray(mawbSheetArr) || mawbSheetArr.length < 2) return '';
   const header = mawbSheetArr[0] || [];
@@ -51,7 +51,7 @@ function sanitize(label) {
   return label.replace(/[^\w]/g, '_');
 }
 
-//Parsing 字段处理，支持空白, raw, left(x), right(x)
+// Parsing 字段处理，支持空白, raw, left(x), right(x)
 function parseValue(val, parsing) {
   if (!parsing || parsing.toLowerCase() === 'raw') return val;
   const leftMatch = parsing.match(/^left\((\d+)\)$/i);
@@ -61,26 +61,27 @@ function parseValue(val, parsing) {
   return val;
 }
 
-
 // 工具：根据 Format 字符串动态生成正则表达式
 function buildRegex(fmt) {
-  let regexStr = fmt.replace(/([.+?^=!:${}()|\[\]\/\\])/g, '\\$1');
+  let regexStr = fmt.replace(/([.+?^=!:${}()|[\]\/\\])/g, '\\$1');
   regexStr = regexStr.replace(/y{4}/g, '\\d{4}');
   regexStr = regexStr.replace(/m{1,2}/gi, '\\d{1,2}');
   regexStr = regexStr.replace(/d{1,2}/gi, '\\d{1,2}');
   return new RegExp('^' + regexStr + '$');
 }
 
-// 1. 并行加载三份 JSON 配置
+// 1. 并行加载四份 JSON 配置（rule, hts, mid, PGA）
 Promise.all([
   fetch(`${CONFIG_PATH}/rule.json?ts=${ts}`).then(r => r.json()),
   fetch(`${CONFIG_PATH}/hts.json?ts=${ts}`).then(r => r.json()),
-  fetch(`${CONFIG_PATH}/mid.json?ts=${ts}`).then(r => r.json())
+  fetch(`${CONFIG_PATH}/mid.json?ts=${ts}`).then(r => r.json()),
+  fetch(`${CONFIG_PATH}/PGA.json?ts=${ts}`).then(r => r.json())
 ])
-.then(([rule, hts, mid]) => {
+.then(([rule, hts, mid, pga]) => {
   ruleConfig = rule;
   htsData    = hts;
   midData    = mid;
+  pgaRules   = pga;
   uploadBtn.disabled = false;
   uploadBtn.classList.remove('opacity-50');
   loadingMsg.innerText = '';
@@ -226,6 +227,7 @@ async function generateAndDownload() {
   for (let i = 0; i < main.length; i++) {
     const out = {};
 
+    // 基础字段赋值
     for (const cfg of ruleConfig) {
       const col = cfg.Column;
       const src = cfg.Source.trim().toLowerCase();
@@ -234,18 +236,17 @@ async function generateAndDownload() {
         out[col] = cfg.Value || '';
       }
       else if (src === 'user_upload') {
-        const sk = (cfg.Sheet||'').trim().toLowerCase();
+        const sk = (cfg.Sheet || '').trim().toLowerCase();
         let value;
         if (sk === 'mawb' && cfg.Reference) {
           value = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
         } else {
           const arr = sheetData[sk] || [];
-          const row = sk === 'mawb' ? (arr[0]||{}) : (arr[i]||{});
+          const row = sk === 'mawb' ? (arr[0] || {}) : (arr[i] || {});
           value = row[cfg.Reference] || '';
         }
         out[col] = parseValue(value, cfg.Parsing);
       }
-      
       else if (src === 'user_input') {
         const label = cfg.Label.trim();
         let v = formValues[sanitize(label)] || '';
@@ -257,69 +258,99 @@ async function generateAndDownload() {
         if (fmt) {
           out[col] = formatDateByPattern(d, fmt);
         } else {
-          out[col] = `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+          out[col] = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
         }
       }
     }
 
     // HTS 映射
     (() => {
-      const raw  = (out.HTS||'').toString();
-      const digs = (raw.match(/\d+/g)||[]).join('').slice(0,8);
-      const hit  = htsData.find(r=>r.HTS===digs);
-      if (hit) ['HTS-1','HTS-2','HTS-3','HTS-4','HTS-5']
-        .forEach(c=> out[c] = hit[c] || '');
+      const raw  = (out.HTS || '').toString();
+      const digs = (raw.match(/\d+/g) || []).join('').slice(0, 8);
+      const hit  = htsData.find(r => r.HTS === digs);
+      if (hit) {
+        ['HTS-1', 'HTS-2', 'HTS-3', 'HTS-4', 'HTS-5'].forEach(c => {
+          out[c] = hit[c] || '';
+        });
+      }
     })();
 
     // MID 映射并清空
     (() => {
-      const nm  = (out.ManufacturerName||'').trim();
+      const nm  = (out.ManufacturerName || '').trim();
       const hit = midData.find(r => nm.includes(r.ManufacturerName));
       if (hit) {
         out.ManufacturerCode = hit.ManufacturerCode || '';
-        ['ManufacturerName','ManufacturerStreetAddress','ManufacturerCity','ManufacturerPostalCode','ManufacturerCountry']
-          .forEach(f=> out[f] = '');
+        ['ManufacturerName', 'ManufacturerStreetAddress', 'ManufacturerCity', 'ManufacturerPostalCode', 'ManufacturerCountry'].forEach(f => {
+          out[f] = '';
+        });
+      }
+    })();
+
+    // PGA 后处理
+    (() => {
+      const code = (out.FDAPRODUCTCODE || '').toString().slice(0, 2);
+      for (const rule of pgaRules) {
+        if (code === rule.FDAPRODUCTCODE) {
+          if (rule.Delete_code === 'Y') {
+            // 删除全部相关字段
+            out.FDAPRODUCTCODE = '';
+            Object.keys(rule).forEach(k => {
+              if (k !== 'FDAPRODUCTCODE' && k !== 'Delete_code') {
+                out[k] = '';
+              }
+            });
+          } else {
+            // 覆盖非空字段
+            Object.entries(rule).forEach(([k, v]) => {
+              if (k !== 'FDAPRODUCTCODE' && k !== 'Delete_code' && v) {
+                out[k] = v;
+              }
+            });
+          }
+          break;
+        }
       }
     })();
 
     output.push(out);
 
-    if ((i+1)%20===0 || i===main.length-1) {
-      const pct = Math.round(((i+1)/main.length)*100);
+    // 更新进度条
+    if ((i + 1) % 20 === 0 || i === main.length - 1) {
+      const pct = Math.round(((i + 1) / main.length) * 100);
       pt.innerText     = `${pct}%`;
       prog.style.width = `${pct}%`;
-      await new Promise(r => setTimeout(r,0));
+      await new Promise(r => setTimeout(r, 0));
     }
   }
 
   // ---------- 日期格式自动识别/设置部分 begin ----------
-  const header = ruleConfig.map(r=>r.Column);
-  const aoa    = [header].concat(output.map(o=> header.map(c=>o[c]||'')));
+  const header = ruleConfig.map(r => r.Column);
+  const aoa    = [header].concat(output.map(o => header.map(c => o[c] || '')));
 
   // 找所有应设为日期格式的列
   const dateCols = ruleConfig
-    .map((r, idx) => ({idx, fmt: (r.Format||'').toLowerCase()}))
+    .map((r, idx) => ({ idx, fmt: (r.Format || '').toLowerCase() }))
     .filter(r => r.fmt.includes('yyyy') && r.fmt.includes('m') && r.fmt.includes('d'))
     .map(r => r.idx);
 
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
 
   // 设置日期列单元格的Excel类型和格式
-  for (let r = 1; r < aoa.length; r++) { // r=1是跳过表头
+  for (let r = 1; r < aoa.length; r++) { // r=1 跳过表头
     for (const c of dateCols) {
       const colLetter = XLSX.utils.encode_col(c);
-      const cellRef = colLetter + (r+1);
+      const cellRef = colLetter + (r + 1);
       const val = aoa[r][c];
       if (val) {
         let d = new Date(val);
-        // 兼容 m/d/yyyy、yyyy-mm-dd 等格式
         if (isNaN(d.getTime())) {
           const m = String(val).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-          if (m) d = new Date(m[3], m[1]-1, m[2]);
+          if (m) d = new Date(m[3], m[1] - 1, m[2]);
         }
         if (!isNaN(d.getTime())) {
           ws2[cellRef].t = 'd';
-          ws2[cellRef].z = 'm/d/yyyy'; // 如有需要可进一步动态匹配 Format 字段
+          ws2[cellRef].z = 'm/d/yyyy';
           ws2[cellRef].v = d;
         }
       }
@@ -327,7 +358,7 @@ async function generateAndDownload() {
   }
   // ---------- 日期格式自动识别/设置部分 end ----------
 
-  const wb2    = XLSX.utils.book_new();
+  const wb2 = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb2, ws2, 'Sheet1');
 
   const mawbOrig = formValues[sanitize('MAWB')] || currentDefaultMawb;
