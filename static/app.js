@@ -51,6 +51,17 @@ function sanitize(label) {
   return label.replace(/[^\w]/g, '_');
 }
 
+//Parsing 字段处理，支持空白, raw, left(x), right(x)
+function parseValue(val, parsing) {
+  if (!parsing || parsing.toLowerCase() === 'raw') return val;
+  const leftMatch = parsing.match(/^left\((\d+)\)$/i);
+  if (leftMatch) return (val || '').toString().slice(0, parseInt(leftMatch[1], 10));
+  const rightMatch = parsing.match(/^right\((\d+)\)$/i);
+  if (rightMatch) return (val || '').toString().slice(-parseInt(rightMatch[1], 10));
+  return val;
+}
+
+
 // 工具：根据 Format 字符串动态生成正则表达式
 function buildRegex(fmt) {
   let regexStr = fmt.replace(/([.+?^=!:${}()|\[\]\/\\])/g, '\\$1');
@@ -224,23 +235,21 @@ async function generateAndDownload() {
       }
       else if (src === 'user_upload') {
         const sk = (cfg.Sheet||'').trim().toLowerCase();
+        let value;
         if (sk === 'mawb' && cfg.Reference) {
-          out[col] = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
+          value = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
         } else {
-          const arr= sheetData[sk] || [];
-          const row= sk === 'mawb' ? (arr[0]||{}) : (arr[i]||{});
-          out[col] = row[cfg.Reference] || '';
+          const arr = sheetData[sk] || [];
+          const row = sk === 'mawb' ? (arr[0]||{}) : (arr[i]||{});
+          value = row[cfg.Reference] || '';
         }
+        out[col] = parseValue(value, cfg.Parsing);
       }
+      
       else if (src === 'user_input') {
         const label = cfg.Label.trim();
         let v = formValues[sanitize(label)] || '';
-        const m = (cfg.Parsing||'').match(/(left|right)\((\d+)\)/i);
-        if (m) {
-          const n = parseInt(m[2],10);
-          v = m[1].toLowerCase() === 'left' ? v.slice(0,n) : v.slice(-n);
-        }
-        out[col] = v;
+        out[col] = parseValue(v, cfg.Parsing);
       }
       else if (src === 'system') {
         const d = new Date();
