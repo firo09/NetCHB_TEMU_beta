@@ -435,9 +435,9 @@ async function generateAndDownload() {
       }
     })();
 
-    // —— SHEIN 专属：校验 ManufacturerPostalCode ——
-    // 规则：仅在 IS_SHEIN 为真时检查；若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
-    if (IS_SHEIN) {
+    // —— 校验 ManufacturerPostalCode（所有客户适用） ——
+    // 规则：若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
+    {
       const raw = (out.ManufacturerPostalCode ?? '').toString();
       const digits = (raw.match(/\d+/g) || []).join('');  // 只取数字
       const allZero = /^0+$/.test(digits);
@@ -558,6 +558,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
