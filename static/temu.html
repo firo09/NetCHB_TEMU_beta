@@ -60,7 +60,7 @@
 
 
   <!-- 左侧切换（美观版、选中更明显） -->
-  <aside class="fixed left-5 top-8 space-y-3 select-none">
+  <aside id="sidebar" class="fixed left-5 top-8 space-y-3 select-none">
     <a href="./temu.html" aria-current="page" class="block w-56 px-6 py-3 rounded-2xl bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold shadow-lg ring-2 ring-blue-300 transform transition-all scale-105">TEMU</a>
     <a href="./shein.html" class="block w-48 px-6 py-3 rounded-2xl bg-white text-emerald-700 border border-emerald-300 font-semibold shadow hover:shadow-md transition-all">SHEIN</a>
   </aside>
@@ -260,5 +260,18 @@
     })();
   </script>
 
+
+<script>
+  function alignSidebar() {
+    const card = document.querySelector('main > div');   // 白色卡片容器
+    const sidebar = document.getElementById('sidebar');
+    if (!card || !sidebar) return;
+    const top = card.getBoundingClientRect().top + window.scrollY;
+    sidebar.style.top = Math.round(top) + 'px';
+  }
+  window.addEventListener('load', alignSidebar);
+  window.addEventListener('resize', alignSidebar);
+</script>
 </body>
+
 </html>
