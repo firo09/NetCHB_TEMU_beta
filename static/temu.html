@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>NETChb TEMU beta</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .dropzone:hover, .dropzone.dragover { background-color:#f0f9ff; border-color:#60a5fa; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+  <!-- 左侧切换 -->
+  <aside class="fixed left-4 top-1/2 -translate-y-1/2 space-y-4">
+    <a href="./temu.html"
+       class="block px-5 py-3 rounded-xl bg-blue-600 text-white font-bold shadow hover:bg-blue-700">TEMU</a>
+    <a href="./shein.html"
+       class="block px-5 py-3 rounded-xl bg-white text-emerald-700 border-2 border-emerald-600 font-bold shadow hover:bg-emerald-50">SHEIN</a>
+  </aside>
+
+  <main class="flex items-center justify-center py-12">
+    <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-3xl">
+      <h1 class="text-4xl font-bold text-center text-red-600 mb-8">NETChb TEMU beta</h1>
+
+      <!-- Step 1：上传 + Port/Date + Continue -->
+      <section id="upload-section" class="mb-8">
+        <label id="dropzone"
+               for="file-input"
+               class="dropzone flex flex-col items-center justify-center border-4 border-dashed border-gray-300 rounded-xl h-48 cursor-pointer transition-colors">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-gray-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M3 15a4 4 0 004 4h10a4 4 0 004-4m-4-4l-4-4m0 0L9 11m4-4v12"/>
+          </svg>
+          <p id="upload-btn" class="text-lg text-gray-600 opacity-50">Click or drag file here</p>
+        </label>
+        <input type="file" id="file-input" accept=".xlsx,xls,csv" class="hidden"/>
+        <p id="loading-msg" class="text-center text-gray-500 mt-2">Loading configuration…</p>
+
+        <!-- Port / Date 两个下拉 -->
+        <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-semibold mb-1">Port</label>
+            <select id="pref-port" class="w-full border rounded-lg px-3 py-2">
+              <option value="">-- Optional --</option>
+              <option>JFK</option><option>LAX</option><option>SFO</option><option>ORD</option>
+              <option>DFW</option><option>MIA</option><option>ATL</option><option>BOS</option><option>SEA</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold mb-1">Date</label>
+            <select id="pref-date" class="w-full border rounded-lg px-3 py-2">
+              <option value="">-- Optional --</option>
+              <option value="today">Today</option>
+              <option value="tomorrow">Tomorrow</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="continue-btn"
+                class="mt-6 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled>
+          Continue
+        </button>
+      </section>
+
+      <!-- Step 2：动态表单 -->
+      <section id="form-section" class="hidden">
+        <form id="dynamic-form" class="grid grid-cols-2 gap-6"></form>
+        <button id="generate-btn" type="button"
+                class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
+          Generate &amp; Download
+        </button>
+      </section>
+
+      <!-- 进度条 -->
+      <section id="progress-container" class="hidden mt-8">
+        <div class="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+          <div id="progress" class="bg-blue-500 h-4 w-0 transition-all"></div>
+        </div>
+        <p id="progress-text" class="text-right text-gray-600 mt-2">0%</p>
+      </section>
+    </div>
+  </main>
+
+  <!-- libs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+
+  <!-- 拖拽 -->
+  <script>
+    const dz = document.getElementById('dropzone');
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', e => {
+      e.preventDefault(); dz.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  </script>
+
+  <div class="fixed bottom-2 right-2 text-xs text-gray-400 select-none">© Tianyi Z. All rights reserved.</div>
+</body>
+</html>
