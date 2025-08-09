@@ -42,8 +42,107 @@ const continueBtn = document.getElementById('continue-btn');
 const portSel     = document.getElementById('pref-port');
 const dateSel     = document.getElementById('pref-date');
 const generateBtn = document.getElementById('generate-btn');
+// 统一 TEMU 主题色（#0071bc）
+(function applyTemuTheme(){
+  if (typeof IS_SHEIN === 'undefined' || IS_SHEIN) return;
+  const temuBlue = '#0071bc';
+  const h1 = document.querySelector('h1');
+  if (h1) h1.style.color = temuBlue;
+  const cont = document.getElementById('continue-btn');
+  if (cont) { cont.style.backgroundColor = temuBlue; cont.style.borderColor = temuBlue; }
+  const gen = document.getElementById('generate-btn');
+  if (gen) { gen.style.backgroundColor = temuBlue; gen.style.borderColor = temuBlue; }
+  const activeNav = document.querySelector('aside a[aria-current="page"]') || document.querySelector('aside a.scale-105');
+  if (activeNav) { activeNav.style.background = temuBlue; activeNav.style.color = '#fff'; }
+})();
 
 let ruleConfig = [], htsData = [], midData = [], pgaRules = [];
+
+
+// ===== 自绘下拉：样式注入 + 构建 =====
+(function injectSelectStyles(){
+  if (document.getElementById('ui-select-styles')) return;
+  const css = `
+.ui-select{position:relative;width:100%}
+.ui-select__btn{width:100%;border:1px solid #d1d5db;border-radius:12px;padding:10px 40px 10px 14px;background:#fff;
+  box-shadow:0 1px 2px rgba(16,24,40,.05);line-height:1.2}
+.ui-select__caret{position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:.6}
+.ui-select__menu{position:absolute;z-index:50;left:0;top:calc(100% + 6px);width:100%;max-height:260px;overflow:auto;
+  background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 8px 24px rgba(16,24,40,.12);display:none}
+.ui-select.open .ui-select__menu{display:block}
+.ui-option{padding:10px 12px;cursor:pointer}
+.ui-option:hover{background:#f3f4f6}
+.ui-option[aria-selected="true"]{background:#eef2ff}
+/* 文本输入框统一外观，和下拉按钮一致 */
+.ui-input{width:100%;border:1px solid #d1d5db;border-radius:12px;padding:10px 14px;background:#fff;
+  box-shadow:0 1px 2px rgba(16,24,40,.05);line-height:1.2;transition:box-shadow .15s,border-color .15s;outline:0}
+.ui-input:focus{box-shadow:0 0 0 3px rgba(148,163,184,.25)};`
+  const style = document.createElement('style'); style.id='ui-select-styles'; style.textContent = css;
+  document.head.appendChild(style);
+})();
+
+function buildCustomSelect(sel, accent) {
+  if (!sel || sel.dataset.uiBound) return;
+  sel.dataset.uiBound = '1';
+  sel.classList.add('hidden');
+
+  const root = document.createElement('div');
+  root.className = 'ui-select';
+  sel.insertAdjacentElement('afterend', root);
+
+  const btn = document.createElement('button');
+  btn.type='button'; btn.className='ui-select__btn';
+  btn.textContent = sel.options[sel.selectedIndex]?.text || '-- Select --';
+  root.appendChild(btn);
+
+  const caret = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  caret.setAttribute('viewBox','0 0 20 20'); caret.setAttribute('width','20'); caret.setAttribute('height','20');
+  caret.classList.add('ui-select__caret');
+  caret.innerHTML = '<path fill="currentColor" d="M5.3 7.3a1 1 0 0 1 1.4 0L10 10.6l3.3-3.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 0-1.4z"/>';
+  root.appendChild(caret);
+
+  const menu = document.createElement('div');
+  menu.className = 'ui-select__menu';
+  Array.from(sel.options).forEach(opt => {
+    const item = document.createElement('div');
+    item.className = 'ui-option';
+    item.textContent = opt.text;
+    item.dataset.value = opt.value;
+    if (opt.selected) item.setAttribute('aria-selected','true');
+    item.addEventListener('click', () => {
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', {bubbles:true}));
+      btn.textContent = opt.text;
+      menu.querySelectorAll('.ui-option[aria-selected="true"]').forEach(n => n.removeAttribute('aria-selected'));
+      item.setAttribute('aria-selected','true');
+      root.classList.remove('open');
+    });
+    menu.appendChild(item);
+  });
+  root.appendChild(menu);
+
+  btn.addEventListener('click', () => root.classList.toggle('open'));
+  document.addEventListener('click', (e)=>{ if(!root.contains(e.target)) root.classList.remove('open'); });
+
+  const temuBlue = '#0071bc', sheinGreen = '#10b981';
+  btn.addEventListener('focus', () => { btn.style.boxShadow = '0 0 0 3px rgba(148,163,184,.25)'; });
+  btn.addEventListener('blur',  () => { btn.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)'; });
+}
+
+function hexToRgba(hex, a){
+  const m = hex.replace('#','');
+  const bigint = parseInt(m.length===3? m.split('').map(x=>x+x).join(''): m, 16);
+  const r = (bigint>>16)&255, g=(bigint>>8)&255, b=bigint&255;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+function beautifyAllSelects(container, accent){
+  container.querySelectorAll('select').forEach(sel => {
+    if (sel.offsetParent !== null) {
+      buildCustomSelect(sel, accent);
+    }
+  });
+}
 
 // 日期格式化
 function formatDateByPattern(date, pattern) {
@@ -185,7 +284,7 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
         <label for="${id}" class="font-semibold block mb-1">${label}</label>
         <input type="text" id="${id}" value="${defaultVal}"
                ${placeholder?`placeholder="${placeholder}"`:''}
-               data-format="${fmt}" class="border rounded px-2 py-1 w-full placeholder-gray-400" />`;
+               data-format="${fmt}" class="ui-input w-full placeholder-gray-400" />`;
     }
 
     formEl.appendChild(wrapper);
@@ -218,6 +317,14 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
       }
     });
   }
+  
+  // 同步美化：文本输入应用与下拉一致的外观
+  formEl.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea')
+    .forEach(el => { if(!el.classList.contains('ui-input')) el.classList.add('ui-input'); });
+// 自绘美化第二步表单里的所有下拉
+  beautifyAllSelects(formEl, IS_SHEIN ? 'shein' : 'temu');
+  // 统一文本输入与下拉的外观
+  if (typeof beautifyAllTextInputs === 'function') beautifyAllTextInputs(formEl);
 }
 
 // ====== 下面开始是你原先的生成逻辑（略做调整：导出文件名根据客户变化） ======
@@ -395,3 +502,44 @@ async function generateAndDownload() {
   const tag = IS_SHEIN ? 'SHEIN' : 'TEMU';
   XLSX.writeFile(wb2, `${mawbOrig}_NETChb_${tag}.xlsx`);
 }
+
+
+/** 统一美化文本/日期/数字输入框，使其与自绘下拉(btn)完全一致的半径/边框/阴影 */
+function beautifyAllTextInputs(container){
+  if (!container) return;
+  const inputs = container.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea');
+  inputs.forEach(el => {
+    if (el.dataset.uiTxt === '1') return;
+    el.dataset.uiTxt = '1';
+    // 基础外观（与 .ui-select__btn 对齐）
+    el.style.border = '1px solid #d1d5db';             // slate-300
+    el.style.borderRadius = '12px';                    // 圆角与下拉一致
+    el.style.padding = '10px 14px';                    // 与下拉近似（下拉右侧有箭头多 26px）
+    el.style.background = '#fff';
+    el.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)';
+    el.style.transition = 'box-shadow .15s, border-color .15s';
+    el.style.outline = 'none';
+    el.addEventListener('focus', () => {
+      el.style.boxShadow = '0 0 0 3px rgba(148,163,184,.25)';   // 与下拉聚焦外光一致
+      el.style.borderColor = '#d1d5db';
+    });
+    el.addEventListener('blur',  () => {
+      el.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)';
+      el.style.borderColor = '#d1d5db';
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const sections = [document.getElementById('dynamic-form'), document.getElementById('upload-section')];
+  sections.forEach(sec => { if (sec) { try { beautifyAllTextInputs(sec); } catch(e){} } });
+});
+
+
+// Apply input skin globally on load
+document.addEventListener('DOMContentLoaded', () => {
+  const accent = IS_SHEIN ? 'emerald' : 'blue';
+  beautifyAllTextInputs(document);
+  const df = document.getElementById('dynamic-form');
+  if (df) observeNewInputs(df, 'neutral');
+});
