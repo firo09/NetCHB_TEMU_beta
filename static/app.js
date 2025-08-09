@@ -402,12 +402,34 @@ async function generateAndDownload() {
       }
     }
 
-    // HTS 映射
+    // HTS 映射（按规则长度做前缀匹配，优先最长命中）
     (() => {
-      const raw  = (out.HTS || '').toString();
-      const digs = (raw.match(/\d+/g) || []).join('').slice(0, 8);
-      const hit  = htsData.find(r => r.HTS === digs);
-      if (hit) ['HTS-1','HTS-2','HTS-3','HTS-4','HTS-5'].forEach(c => out[c] = hit[c] || '');
+      const raw = (out.HTS || '').toString();
+      // 只取数字，避免有空格、点或者横杠
+      const rawDigits = (raw.match(/\d+/g) || []).join('');
+      if (!rawDigits) return;
+    
+      let best = null;
+      let bestLen = -1;
+    
+      for (const rule of htsData) {
+        const ruleDigits = (rule.HTS || '').toString().replace(/\D/g, '');
+        if (!ruleDigits) continue;
+        const n = ruleDigits.length;
+        // 只要“左 n 位”等于规则的 HTS，就算匹配
+        if (rawDigits.slice(0, n) === ruleDigits) {
+          if (n > bestLen) {
+            best = rule;
+            bestLen = n;
+          }
+        }
+      }
+    
+      if (best) {
+        ['HTS-1', 'HTS-2', 'HTS-3', 'HTS-4', 'HTS-5'].forEach(k => {
+          if (best[k]) out[k] = best[k];
+        });
+      }
     })();
 
     // MID 映射并清空
@@ -560,6 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
