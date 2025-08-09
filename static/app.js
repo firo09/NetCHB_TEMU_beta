@@ -386,7 +386,9 @@ async function generateAndDownload() {
         else {
           const arr = sheetData[sk] || [];
           const row = sk === 'mawb' ? (arr[0] || {}) : (arr[i] || {});
-          value = row[cfg.Reference] || '';
+          const refLower = (cfg.Reference || '').toString().trim().toLowerCase();
+          const key = Object.keys(row).find(k => k.toString().trim().toLowerCase() === refLower);
+          value = key ? row[key] : '';
         }
         out[col] = parseValue(value, cfg.Parsing);
       } else if (src === 'user_input') {
@@ -558,6 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
