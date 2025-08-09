@@ -5,15 +5,15 @@ const EXCEL_PASSWORD = 'xU$&#3_*VB';
 
 // ——— Port 映射（Port 字样输入=代码；Firms Code=firms）———
 const PORT_MAP = {
-  JFK: { code: '4701', firms: 'EAT5' },
-  LAX: { code: '2720', firms: 'WBH9' },
-  SFO: { code: '2801', firms: 'W0B3' },
-  ORD: { code: '3901', firms: 'HBT1' },
-  DFW: { code: '5501', firms: 'SE04' },
-  MIA: { code: '5206', firms: 'LEG0' },
-  ATL: { code: '1704', firms: 'L543' },
-  BOS: { code: '0417', firms: 'AAN5' },
-  SEA: { code: '3029', firms: 'WBU6' },
+  JFK: { code: '4701', firms: 'EAT5', state: 'NY' },
+  LAX: { code: '2720', firms: 'WBH9', state: 'CA' },
+  SFO: { code: '2801', firms: 'W0B3', state: 'CA' },
+  ORD: { code: '3901', firms: 'HBT1', state: 'IL' },
+  DFW: { code: '5501', firms: 'SE04', state: 'TX' },
+  MIA: { code: '5206', firms: 'LEG0', state: 'FL' },
+  ATL: { code: '1704', firms: 'L543', state: 'GA' },
+  BOS: { code: '0417', firms: 'AAN5', state: 'MA' },
+  SEA: { code: '3029', firms: 'WBU6', state: 'WA' },
 };
 
 // 识别当前页面客户（用于导出文件名）
@@ -290,9 +290,9 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
     formEl.appendChild(wrapper);
   }
 
-  // —— 覆盖：Port ——（所有含“Port”的输入 + “Firms Code”）
+  // —— 覆盖：Port ——（所有含“Port”的输入 + “Firms Code” + “State of Destination”）
   if (portKey && PORT_MAP[portKey]) {
-    const { code, firms } = PORT_MAP[portKey];
+    const { code, firms, state } = PORT_MAP[portKey];
     labels.forEach(lab => {
       if (lab.toLowerCase().includes('port')) {
         const el = document.getElementById(sanitize(lab));
@@ -302,6 +302,9 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
     });
     const firmsEl = document.getElementById(sanitize('Firms Code'));
     if (firmsEl) firmsEl.value = firms;
+
+    const stateEl = document.getElementById(sanitize('State of Destination'));
+    if (stateEl) stateEl.value = state;
   }
 
   // —— 覆盖：Date ——（所有 Label 含 “Date”的输入，格式 m/d/yyyy）
@@ -543,3 +546,4 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
