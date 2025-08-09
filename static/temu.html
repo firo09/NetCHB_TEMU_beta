@@ -68,7 +68,7 @@
 
   <main class="flex items-center justify-center py-12">
     <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-3xl">
-      <h1 class="text-4xl font-bold text-center text-red-600 mb-8">NETChb TEMU beta</h1>
+      <h1 class="text-4xl font-bold text-center text-[#0071bc] mb-8">NETChb TEMU beta</h1>
 
       <section id="upload-section" class="mb-8">
         <label id="dropzone" for="file-input"
@@ -115,14 +115,15 @@
       <section id="form-section" class="hidden">
         <form id="dynamic-form" class="grid grid-cols-2 gap-6"></form>
         <button id="generate-btn" type="button"
-                class="mt-6 w-full bg-temuBlue hover:bg-temuBlue text-white font-semibold py-3 rounded-xl transition">
+                class="mt-6 w-full text-white font-semibold py-3 rounded-xl transition"
+                style="background-color:#0071bc; border-color:#0071bc;">
           Generate &amp; Download
         </button>
       </section>
 
       <section id="progress-container" class="hidden mt-8">
         <div class="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-          <div id="progress" class="bg-temuBlue h-4 w-0 transition-all"></div>
+          <div id="progress" class="h-4 w-0 transition-all" style="background-color:#0071bc;"></div>
         </div>
         <p id="progress-text" class="text-right text-gray-600 mt-2">0%</p>
       </section>
@@ -275,3 +276,4 @@
 </body>
 
 </html>
+
