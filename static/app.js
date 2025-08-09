@@ -48,8 +48,6 @@ const generateBtn = document.getElementById('generate-btn');
   const temuBlue = '#0071bc';
   const h1 = document.querySelector('h1');
   if (h1) h1.style.color = temuBlue;
-  const cont = document.getElementById('continue-btn');
-  if (cont) { cont.style.backgroundColor = temuBlue; cont.style.borderColor = temuBlue; }
   const gen = document.getElementById('generate-btn');
   if (gen) { gen.style.backgroundColor = temuBlue; gen.style.borderColor = temuBlue; }
   const prog = document.getElementById('progress');
@@ -560,6 +558,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
