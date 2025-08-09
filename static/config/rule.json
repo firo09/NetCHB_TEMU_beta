@@ -645,17 +645,17 @@
   },
   {
     "Column": "STATE OF DESTINATION",
-    "Source": "fixed",
-    "Value": "CA",
+    "Source": "user_input",
+    "Value": "",
     "Reference": "",
     "Sheet": "",
-    "Label": "",
-    "Parsing": "",
+    "Label": "State of Destination",
+    "Parsing": "raw",
     "Format": "",
-    "allow_input": "",
-    "has_dropdown": "",
+    "allow_input": "Y",
+    "has_dropdown": "N",
     "dropdown_options": "",
-    "default_value": ""
+    "default_value": "CA"
   },
   {
     "Column": "FDAPRODUCTCODE",
