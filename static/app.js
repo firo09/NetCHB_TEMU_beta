@@ -52,6 +52,8 @@ const generateBtn = document.getElementById('generate-btn');
   if (cont) { cont.style.backgroundColor = temuBlue; cont.style.borderColor = temuBlue; }
   const gen = document.getElementById('generate-btn');
   if (gen) { gen.style.backgroundColor = temuBlue; gen.style.borderColor = temuBlue; }
+  const prog = document.getElementById('progress');
+  if (prog) { prog.style.backgroundColor = temuBlue; }
   const activeNav = document.querySelector('aside a[aria-current="page"]') || document.querySelector('aside a.scale-105');
   if (activeNav) { activeNav.style.background = temuBlue; activeNav.style.color = '#fff'; }
 })();
@@ -558,5 +560,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
