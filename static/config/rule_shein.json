@@ -347,7 +347,7 @@
     "allow_input": "Y",
     "has_dropdown": "N",
     "dropdown_options": "",
-    "default_value": ""
+    "default_value": "ROADGET BUSINESS PTE. LTD."
   },
   {
     "Column": "SellingStreetAddress",
@@ -361,7 +361,7 @@
     "allow_input": "Y",
     "has_dropdown": "N",
     "dropdown_options": "",
-    "default_value": ""
+    "default_value": "12 Marina Boulevard, #15-01, Marina Bay Financial Centre"
   },
   {
     "Column": "SellingCity",
@@ -375,7 +375,7 @@
     "allow_input": "Y",
     "has_dropdown": "N",
     "dropdown_options": "",
-    "default_value": ""
+    "default_value": "Singapore"
   },
   {
     "Column": "SellingCountry",
@@ -389,7 +389,7 @@
     "allow_input": "Y",
     "has_dropdown": "N",
     "dropdown_options": "",
-    "default_value": ""
+    "default_value": "SG"
   },
   {
     "Column": "InvoiceNumber",
