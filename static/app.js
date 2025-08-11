@@ -534,6 +534,45 @@ async function generateAndDownload() {
     }
   }
 
+  // ==== 如果存在 HTSValue 表头：将该列强制为 Number，保留两位小数 ====
+  (function formatHTSValueAsNumber() {
+    const colIndex = header.indexOf('HTSValue');
+    if (colIndex === -1) return; // 没有此列就跳过
+
+    for (let r = 1; r < aoa.length; r++) {
+      const rowIdx = r + 1; // Excel 行号（含表头）
+      const c = XLSX.utils.encode_col(colIndex);
+      const cellRef = c + rowIdx;
+
+      // 读取 AOA 的原值（字符串/数字都有可能）
+      let raw = aoa[r][colIndex];
+
+      // 空值跳过
+      if (raw === undefined || raw === null || raw === '') continue;
+
+      // 去除逗号、空格等，转数字
+      if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
+      let num = Number(raw);
+
+      // 非法数字跳过
+      if (!isFinite(num)) continue;
+
+      // 保留两位小数（数值型），避免 toFixed 变成字符串
+      num = Math.round(num * 100) / 100;
+
+      // 如果该单元格还没被 aoa_to_sheet 创建，先确保存在
+      if (!ws2[cellRef]) ws2[cellRef] = { t: 'n', v: num, z: '0.00' };
+      else {
+        ws2[cellRef].t = 'n';
+        ws2[cellRef].v = num;
+        ws2[cellRef].z = '0.00';
+      }
+
+      // 同步回 AOA（可选，不同步也不影响导出）
+      aoa[r][colIndex] = num;
+    }
+  })();
+  
   const wb2 = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb2, ws2, 'Sheet1');
 
@@ -582,6 +621,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
