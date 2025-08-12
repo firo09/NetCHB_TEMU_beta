@@ -328,6 +328,54 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   beautifyAllSelects(formEl, IS_SHEIN ? 'shein' : 'temu');
   // 统一文本输入与下拉的外观
   if (typeof beautifyAllTextInputs === 'function') beautifyAllTextInputs(formEl);
+
+  // ===== 动态标红：空白文本框 & 未选择的下拉（含自绘下拉） =====
+  const NORMAL_BORDER = '#d1d5db';
+  const ERROR_BORDER  = 'red';
+
+  // 自绘下拉对应的可见按钮（select 后面紧跟的 .ui-select 下的 .ui-select__btn）
+  function getCustomSelectButton(sel) {
+    const uiRoot = sel.nextElementSibling;
+    if (uiRoot && uiRoot.classList && uiRoot.classList.contains('ui-select')) {
+      return uiRoot.querySelector('.ui-select__btn');
+    }
+    return null;
+  }
+
+  function setBorder(el, isError) {
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+      el.style.borderColor = isError ? ERROR_BORDER : NORMAL_BORDER;
+      return;
+    }
+    if (el.tagName === 'SELECT') {
+      const btn = getCustomSelectButton(el);
+      if (btn) btn.style.borderColor = isError ? ERROR_BORDER : NORMAL_BORDER;
+      else     el.style.borderColor  = isError ? ERROR_BORDER : NORMAL_BORDER;
+    }
+  }
+
+  function validateOne(el) {
+    const isEmpty = (el.value || '').trim() === '';
+    setBorder(el, isEmpty);
+  }
+
+  function validateAll() {
+    formEl.querySelectorAll('input[type="text"], textarea, select').forEach(validateOne);
+  }
+
+  // 初始检查（有默认值的不会红；空的会红）
+  validateAll();
+
+  // 动态监听：清空→变红；填入/选择→恢复
+  formEl.querySelectorAll('input[type="text"], textarea').forEach(el => {
+    el.addEventListener('input', () => validateOne(el));
+    el.addEventListener('change', () => validateOne(el)); // 兼容
+  });
+  formEl.querySelectorAll('select').forEach(sel => {
+    sel.addEventListener('change', () => validateOne(sel));
+  });
+  // ===== 结束：动态标红 =====
+
 }
 
 // ====== 下面开始是你原先的生成逻辑（略做调整：导出文件名根据客户变化） ======
@@ -621,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
