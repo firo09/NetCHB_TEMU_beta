@@ -651,7 +651,12 @@ function beautifyAllTextInputs(container){
     });
     el.addEventListener('blur',  () => {
       el.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)';
-      el.style.borderColor = '#d1d5db';
+      // 如果值为空，保持红色；否则恢复灰色
+      if ((el.value || '').trim() === '') {
+        el.style.borderColor = 'red';
+      } else {
+        el.style.borderColor = '#d1d5db';
+      }
     });
   });
 }
@@ -669,6 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
 
 
 
