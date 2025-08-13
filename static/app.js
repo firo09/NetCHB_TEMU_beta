@@ -383,30 +383,48 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
       if (lab.toLowerCase().includes('port')) {
         const el = document.getElementById(sanitize(lab));
         if (el && el.tagName === 'INPUT') el.value = code;
-        if (el && el.tagName === 'SELECT') el.value = code;
+        if (el && el.tagName === 'SELECT') {
+          el.value = code;
+          el.dispatchEvent(new Event('change', { bubbles: true })); // 让自绘下拉按钮也更新文字
+        }
       }
     });
     const firmsEl = document.getElementById(sanitize('Firms Code'));
-    if (firmsEl) firmsEl.value = firms;
+    if (firmsEl) {
+      firmsEl.value = firms;
+      if (firmsEl.tagName === 'SELECT') {
+        firmsEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
 
     const stateEl = document.getElementById(sanitize('State of Destination'));
-    if (stateEl) stateEl.value = state;
+    if (stateEl) {
+      stateEl.value = state;
+      if (stateEl.tagName === 'SELECT') {
+        stateEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
   }
 
   // —— 覆盖：Date ——（所有 Label 含 “Date”的输入，格式 m/d/yyyy）
-  if (dateKey === 'today' || dateKey === 'tomorrow') {
+  if (['today', 'tomorrow', 'day_after_tomorrow'].includes(dateKey)) {
     const base = new Date();
     if (dateKey === 'tomorrow') base.setDate(base.getDate() + 1);
+    if (dateKey === 'day_after_tomorrow') base.setDate(base.getDate() + 2);
     const text = formatDateByPattern(base, 'm/d/yyyy');
 
     labels.forEach(lab => {
       if (lab.toLowerCase().includes('date')) {
         const el = document.getElementById(sanitize(lab));
-        if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT')) el.value = text;
+        if (el && el.tagName === 'INPUT') el.value = text;
+        if (el && el.tagName === 'SELECT') {
+          el.value = text;
+          el.dispatchEvent(new Event('change', { bubbles: true })); // 同步更新自绘下拉
+        }
       }
     });
   }
-  
+
   // 同步美化：文本输入应用与下拉一致的外观
   formEl.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea')
     .forEach(el => { if(!el.classList.contains('ui-input')) el.classList.add('ui-input'); });
