@@ -17,7 +17,7 @@ const PORT_MAP = {
 };
 
 // 识别当前页面客户（用于导出文件名）
-const IS_SHEIN = (document.body.getAttribute('data-client') === 'shein');
+const IS_SHEIN = (document.body && document.body.getAttribute('data-client') === 'shein');
 
 // 根据客户选择不同的配置文件名（SHEIN 使用 *_shein.json）
 const CONFIG_FILES = IS_SHEIN
@@ -179,6 +179,65 @@ function parseValue(val, parsing) {
   return val;
 }
 
+
+// —— 新增：自动识别标题行 + 关键词右侧取值（通用视图） —— 
+function buildSheetView(arrAOA, expectedHeaders) {
+  const norm = s => (s ?? '').toString().trim().toLowerCase();
+
+  // 1) 自动识别标题行：命中预期列名最多者（相同则取更靠近数据区的一行）
+  let headerRowIdx = -1, bestHit = -1;
+  for (let r = 0; r < arrAOA.length; r++) {
+    const row = (arrAOA[r] || []).map(norm);
+    let hit = 0;
+    for (const h of (expectedHeaders || [])) {
+      const hh = norm(h);
+      if (!hh) continue;
+      if (row.includes(hh)) hit++;
+    }
+    if (hit > bestHit || (hit === bestHit && r > headerRowIdx)) {
+      bestHit = hit; headerRowIdx = r;
+    }
+  }
+  const pass = (bestHit >= 2) || (bestHit >= Math.ceil((expectedHeaders || []).length / 2));
+  if (!pass) headerRowIdx = -1;
+
+  const colMap = {};
+  if (headerRowIdx >= 0) {
+    const headerRow = arrAOA[headerRowIdx] || [];
+    headerRow.forEach((name, idx) => { colMap[norm(name)] = idx; });
+  }
+
+  return {
+    headerRowIdx,
+    getByHeaderRow: (i, refName) => {
+      if (headerRowIdx < 0) return '';
+      const rowIdx = headerRowIdx + 1 + i;
+      const colIdx = colMap[norm(refName)];
+      if (colIdx == null) return '';
+      const row = arrAOA[rowIdx] || [];
+      return row[colIdx] ?? '';
+    },
+    getByKeywordRight: (keyword) => {
+      if (!arrAOA || arrAOA.length === 0) return '';
+      const lastRow = (headerRowIdx >= 0) ? headerRowIdx - 1 : (arrAOA.length - 1);
+      const keyNorm = norm(keyword);
+      for (let r = lastRow; r >= 0; r--) {
+        const row = arrAOA[r] || [];
+        for (let c = 0; c < row.length; c++) {
+          const cell = row[c];
+          if (norm(cell) === keyNorm) {
+            for (let cc = c + 1; cc < row.length; cc++) {
+              const v = row[cc];
+              if (v !== '' && v !== undefined && v !== null) return v;
+            }
+            return row[c + 1] ?? '';
+          }
+        }
+      }
+      return '';
+    }
+  };
+}
 function buildRegex(fmt) {
   let regexStr = fmt.replace(/([.+?^=!:${}()|[\]\/\\])/g, '\\$1');
   regexStr = regexStr.replace(/y{4}/g, '\\d{4}');
@@ -187,14 +246,25 @@ function buildRegex(fmt) {
   return new RegExp('^' + regexStr + '$');
 }
 
-// 加载配置（仅客户页面会有 uploadBtn）
-if (uploadBtn) {
-  Promise.all([
-    fetch(`${CONFIG_PATH}/${CONFIG_FILES.rule}?ts=${ts}`).then(r => r.json()),
-    fetch(`${CONFIG_PATH}/${CONFIG_FILES.hts}?ts=${ts}`).then(r => r.json()),
-    fetch(`${CONFIG_PATH}/${CONFIG_FILES.mid}?ts=${ts}`).then(r => r.json()),
-    fetch(`${CONFIG_PATH}/${CONFIG_FILES.pga}?ts=${ts}`).then(r => r.json())
-  ]).then(([rule, hts, mid, pga]) => {
+// 加载配置（在 DOM 就绪后执行，确保元素存在；HTS/MID/PGA 缺失也不阻塞）
+function __startConfigLoad() {
+  const uploadBtn   = document.getElementById('upload-btn');
+  const loadingMsg  = document.getElementById('loading-msg');
+  if (!uploadBtn || !loadingMsg) return; // 非客户页
+
+  loadingMsg.innerText = 'Loading configuration...';
+
+  const safeFetch = (url, fallback) => fetch(url).then(r => r.ok ? r.json() : fallback).catch(() => fallback);
+
+  safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.rule}?ts=${ts}`, null).then(rule => {
+    if (!rule) throw new Error('rule config missing');
+    return Promise.all([
+      Promise.resolve(rule),
+      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.hts}?ts=${ts}`, []),
+      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.mid}?ts=${ts}`, []),
+      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.pga}?ts=${ts}`, [])
+    ]);
+  }).then(([rule, hts, mid, pga]) => {
     ruleConfig = rule; htsData = hts; midData = mid; pgaRules = pga;
     uploadBtn.disabled = false;
     uploadBtn.classList.remove('opacity-50');
@@ -203,15 +273,31 @@ if (uploadBtn) {
     console.error('Failed to load configs', e);
     loadingMsg.innerText = 'Failed to load configuration';
   });
+}
 
-  // 选择文件
+// DOMContentLoaded 触发加载；若已就绪则立即加载
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', __startConfigLoad);
+} else {
+  __startConfigLoad();
+}
+// 选择文件
   uploadBtn.addEventListener('click', () => { try { fileInput.value = ''; } catch (_) {} fileInput.click(); });
   fileInput.addEventListener('change', () => {
     if (!fileInput.files.length) { alert('Please select a file'); return; }
     currentFile = fileInput.files[0];
     const base = currentFile.name.replace(/\.(xlsx|xls|csv)$/i, '');
-    const m = base.match(/(\d{11})$/);
-    currentDefaultMawb = m ? m[1] : '';
+
+    // 支持两种：11位；或 3位-8位（去掉连字符）
+    let m = base.match(/(\d{11})$/);
+    if (!m) {
+      const m2 = base.match(/(\d{3})-(\d{8})$/);
+      if (m2) currentDefaultMawb = m2[1] + m2[2];
+      else    currentDefaultMawb = '';
+    } else {
+      currentDefaultMawb = m[1];
+    }
+
     continueBtn && (continueBtn.disabled = false);
 
     // 上传成功提示（英文）
@@ -241,7 +327,7 @@ if (uploadBtn) {
     if (!currentFile) { alert('No file selected'); return; }
     generateAndDownload();
   });
-}
+
 
 // 渲染动态表单，并根据 Port/Date 做覆盖
 function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
@@ -411,8 +497,81 @@ async function generateAndDownload() {
       sheetData[key] = XLSX.utils.sheet_to_json(ws, { defval:'' });
     }
   }
+  // —— 新增：构建每个 sheet 的 AOA 视图，用于自动识别标题行 & 非标题区关键词查找 ——
+  const sheetAOA = {};
+  for (const name of wb.SheetNames) {
+    const key = name.trim().toLowerCase();
+    const ws = wb.Sheets[name];
+    sheetAOA[key] = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+  }
 
-  const main = sheetData['hawb'] || [];
+  const expectedHeadersBySheet = {};
+  for (const cfg of ruleConfig) {
+    if ((cfg.Source || '').toString().trim().toLowerCase() !== 'user_upload') continue;
+    const sk = (cfg.Sheet || '').toString().trim().toLowerCase();
+    const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+    if (lookup === 'keyword_right') continue;
+    const ref = (cfg.Reference || '').toString().trim();
+    if (!ref) continue;
+    (expectedHeadersBySheet[sk] ||= new Set()).add(ref);
+  }
+
+  const sheetViews = {};
+  Object.keys(sheetAOA).forEach(sk => {
+    const expected = Array.from(expectedHeadersBySheet[sk] || []);
+    sheetViews[sk] = buildSheetView(sheetAOA[sk], expected);
+  });
+
+
+  // ===== Determine primary data rows from CONFIG (no fallback) =====
+function _rowEmpty(r) {
+  if (!r) return true;
+  for (let i = 0; i < r.length; i++) {
+    const v = r[i];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return false;
+  }
+  return true;
+}
+
+let mainCount = 0;
+let primarySheetKey = null;
+const sheetCandidates = new Set();
+
+for (const cfg of ruleConfig) {
+  const src = (cfg.Source || '').toString().trim().toLowerCase();
+  if (src !== 'user_upload') continue;
+  const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+  if (lookup === 'keyword_right') continue; // keyword-only fields don't drive rows
+  const sk = (cfg.Sheet || '').toString().trim().toLowerCase();
+  if (!sk || sk === 'mawb') continue; // singleton sheet shouldn't drive rows
+  sheetCandidates.add(sk);
+}
+
+if (sheetCandidates.size > 0) {
+  sheetCandidates.forEach(sk => {
+    const view = sheetViews[sk];
+    const aoa  = sheetAOA[sk] || [];
+    if (view && view.headerRowIdx >= 0) {
+      const start = view.headerRowIdx + 1;
+      let end = aoa.length;
+      while (end > start && _rowEmpty(aoa[end-1])) end--;
+      const count = Math.max(0, end - start);
+      if (count > mainCount) { mainCount = count; primarySheetKey = sk; }
+    }
+  });
+}
+
+// 'main' only provides length for the primary loop
+let main = [];
+if (mainCount > 0) {
+  main = new Array(mainCount).fill(0);
+} else {
+  alert('配置未提供可驱动行数的 header 字段：\n' +
+        '- 请在规则中至少为一个 sheet 提供 Source=user_upload 且 Lookup!=keyword_right 的字段，\n' +
+        '  以便自动识别标题行并确定数据行数。');
+  return;
+}
+
   const output = [];
   const prog = document.getElementById('progress');
   const pt   = document.getElementById('progress-text');
@@ -429,17 +588,28 @@ async function generateAndDownload() {
         out[col] = cfg.Value || '';
       } else if (src === 'user_upload') {
         const sk = (cfg.Sheet || '').trim().toLowerCase();
-        let value;
-        if (sk === 'mawb' && cfg.Reference) value = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
-        else {
-          const arr = sheetData[sk] || [];
-          const row = sk === 'mawb' ? (arr[0] || {}) : (arr[i] || {});
-          const refLower = (cfg.Reference || '').toString().trim().toLowerCase();
-          const key = Object.keys(row).find(k => k.toString().trim().toLowerCase() === refLower);
-          value = key ? row[key] : '';
+        const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+        let value = '';
+        if (sk === 'mawb' && cfg.Reference && (lookup === 'header' || lookup === 'singleton')) {
+          value = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
+        } else {
+          const view = sheetViews[sk];
+          if (view) {
+            if (lookup === 'keyword_right') {
+              value = view.getByKeywordRight(cfg.Reference);
+            } else { // 默认 header
+              value = view.getByHeaderRow(i, cfg.Reference);
+            }
+          } else {
+            // 兜底：沿用旧逻辑
+            const arr = sheetData[sk] || [];
+            const row = arr[i] || {};
+            const refLower = (cfg.Reference || '').toString().trim().toLowerCase();
+            const key = Object.keys(row).find(k => k.toString().trim().toLowerCase() === refLower);
+            value = key ? row[key] : '';
+          }
         }
-        out[col] = parseValue(value, cfg.Parsing);
-      } else if (src === 'user_input') {
+        out[col] = parseValue(value, cfg.Parsing);      } else if (src === 'user_input') {
         const label = cfg.Label?.trim() || '';
         let v = formValues[sanitize(label)] || '';
         out[col] = parseValue(v, cfg.Parsing);
@@ -491,21 +661,47 @@ async function generateAndDownload() {
       }
     })();
 
-    // PGA
+    // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Error_fix 前缀替换）
     (() => {
-      const code = (out.FDAPRODUCTCODE || '').toString().slice(0, 2);
+      const rawCode = (out.FDAPRODUCTCODE || '').toString();
+      if (!rawCode) return;
+
+      // 1) 最长前缀匹配
+      let best = null;
+      let bestLen = -1;
       for (const rule of pgaRules) {
-        if (code === rule.FDAPRODUCTCODE) {
-          if (rule.Delete_code === 'Y') {
-            out.FDAPRODUCTCODE = '';
-            Object.keys(rule).forEach(k => { if (k!=='FDAPRODUCTCODE' && k!=='Delete_code') out[k]=''; });
-          } else {
-            Object.entries(rule).forEach(([k, v]) => { if (k!=='FDAPRODUCTCODE' && k!=='Delete_code' && v) out[k]=v; });
-          }
-          break;
+        const key = (rule.FDAPRODUCTCODE || '').toString();
+        if (!key) continue;
+        const n = key.length;
+        if (rawCode.slice(0, n) === key && n > bestLen) {
+          best = rule;
+          bestLen = n;
         }
       }
-    })();
+      if (!best) return;
+
+      // 2) 命中后先处理 Error_fix：用 Error_fix 覆盖左起 N（N=Error_fix 长度）
+      if (best.Error_fix) {
+        const fix = String(best.Error_fix);
+        const n = fix.length;
+        out.FDAPRODUCTCODE = fix + rawCode.slice(n);
+      }
+
+      // 3) Delete_code 处理（优先级最高）
+      if (best.Delete_code === 'Y') {
+        out.FDAPRODUCTCODE = '';
+        Object.keys(best).forEach(k => {
+          if (k !== 'FDAPRODUCTCODE' && k !== 'Delete_code' && k !== 'Error_fix') out[k] = '';
+        });
+        return;
+      }
+
+      // 4) 复制其它字段（跳过标识字段；仅写有值的项）
+      Object.entries(best).forEach(([k, v]) => {
+        if (k === 'FDAPRODUCTCODE' || k === 'Delete_code' || k === 'Error_fix') return;
+        if (v !== undefined && v !== null && v !== '') out[k] = v;
+      });
+    })();                         
 
     // —— 校验 ManufacturerPostalCode（所有客户适用） ——
     // 规则：若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
@@ -581,6 +777,42 @@ async function generateAndDownload() {
       }
     }
   }
+
+// === 新：FDAARRIVALTIME 列强制为“Time”格式（h:mm） ===
+(function formatFDAArrivalTimeAsTime() {
+  const colIndex = header.indexOf('FDAARRIVALTIME');
+  if (colIndex === -1) return;
+
+  for (let r = 1; r < aoa.length; r++) {
+    const raw = aoa[r][colIndex];
+    if (raw == null || raw === '') continue;
+
+    const str = String(raw).trim();
+    // 兼容 "H:MM"、"HH:MM"、可选秒、以及 AM/PM
+    const m = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM|am|pm)?$/);
+    if (!m) continue;
+
+    let h = parseInt(m[1], 10);
+    let mm = parseInt(m[2], 10);
+    let ss = parseInt(m[3] || '0', 10);
+    const ap = (m[4] || '').toLowerCase();
+
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+
+    // Excel 时间序列（一天 = 1）
+    const num = (h * 3600 + mm * 60 + ss) / 86400;
+
+    const cellRef = XLSX.utils.encode_col(colIndex) + (r + 1);
+    if (!ws2[cellRef]) ws2[cellRef] = {};
+    ws2[cellRef].t = 'n';
+    ws2[cellRef].v = num;
+    ws2[cellRef].z = 'h:mm';
+
+    // 同步 AOA
+    aoa[r][colIndex] = num;
+  }
+})();
 
   // ==== 如果存在 HTSValue 表头：将该列强制为 Number，保留两位小数 ====
   (function formatHTSValueAsNumber() {
@@ -674,13 +906,3 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
-
-
-
-
-
-
-
-
-
-
