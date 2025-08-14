@@ -949,7 +949,7 @@ if (mainCount > 0) {
     banner.style.lineHeight = '1.5';
 
     const summary = document.createElement('div');
-    summary.textContent = `⚠ ${hits.length} row(s) had FDAPRODUCTCODE automatically modified. Please review.`;
+    summary.textContent = `⚠ ${hits.length} row(s) had FDAPRODUCTCODE automatically modified. Please review, then delete column Original_ProductCode.`;
     banner.appendChild(summary);
 
     const details = document.createElement('div');
