@@ -784,14 +784,21 @@ if (mainCount > 0) {
     })();
 
     // —— 校验 ManufacturerPostalCode（所有客户适用） ——
-    // 规则：若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
+    // 规则：若包含任何字母，直接替换为 528000；否则若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
     {
       const raw = (out.ManufacturerPostalCode ?? '').toString();
-      const digits = (raw.match(/\d+/g) || []).join('');  // 只取数字
-      const allZero = /^0+$/.test(digits);
-      const tooShort = (digits.length > 0 && digits.length < 6);
-      if (tooShort || allZero) {
+
+      // 新增：若包含任何字母，直接替换为 528000
+      const hasLetter = /[A-Za-z]/.test(raw); // 如需支持全部 Unicode 字母，可改为 /\p{L}/u
+      if (hasLetter) {
         out.ManufacturerPostalCode = '528000';
+      } else {
+        const digits = (raw.match(/\d+/g) || []).join('');  // 只取数字
+        const allZero = /^0+$/.test(digits);
+        const tooShort = (digits.length > 0 && digits.length < 6);
+        if (tooShort || allZero) {
+          out.ManufacturerPostalCode = '528000';
+        }
       }
     }
 
