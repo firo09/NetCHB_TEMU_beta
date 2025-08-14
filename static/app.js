@@ -546,15 +546,21 @@ let mainCount = 0;
 let primarySheetKey = null;
 const sheetCandidates = new Set();
 
-// Helper function to check if a row is effectively empty (contains no real data)
-const isRowEffectivelyEmpty = (row) => {
-  if (!row || !Array.isArray(row) || row.length === 0) {
-    return true;
-  }
-  return !row.some(cell => {
-    const s = String(cell ?? '').trim();
-    return s !== '' && s !== '0';
-  });
+// Helper: check if a cell value should be treated as empty/placeholder
+const isEmptyVal = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (!s) return true;                    // empty or whitespace
+  if (/^[-–—]+$/.test(s)) return true;    // only dashes
+  if (s === 'na' || s === 'n/a' || s === 'null') return true;
+  if (/^0+(\.0+)?$/.test(s)) return true; // 0, 0.0, 000
+  return false;
+};
+
+// Helper function to check if a row is effectively empty - looks only at key columns when provided
+const isRowEffectivelyEmpty = (row, keyIdxs) => {
+  if (!row || !Array.isArray(row) || row.length === 0) return true;
+  const cells = (keyIdxs && keyIdxs.length) ? keyIdxs.map(i => row[i]) : row;
+  return cells.every(isEmptyVal);
 };
 
 for (const cfg of ruleConfig) {
@@ -573,13 +579,22 @@ if (sheetCandidates.size > 0) {
     const aoa = sheetAOA[sk] || [];
     if (view && view.headerRowIdx >= 0) {
       const dataRows = aoa.slice(view.headerRowIdx + 1);
-      // Filter out all empty rows from the data portion of the sheet
-      const nonEmptyRows = dataRows.filter(row => !isRowEffectivelyEmpty(row));
+      // Determine key columns for this sheet using expected header names
+      const expected = Array.from(expectedHeadersBySheet[sk] || []);
+      const headerRow = aoa[view.headerRowIdx] || [];
+      const norm = (x) => String(x ?? '').trim().toLowerCase();
+      const keyIdxs = expected
+        .map(h => headerRow.findIndex(x => norm(x) === norm(h)))
+        .filter(i => i >= 0);
+      // Filter out rows where all key columns are effectively empty
+      const nonEmptyRows = dataRows.filter(row => !isRowEffectivelyEmpty(row, keyIdxs));
       const count = nonEmptyRows.length;
       
       if (count > mainCount) {
         mainCount = count;
         primarySheetKey = sk;
+        // remember key columns for primary sheet
+        window.__primaryKeyIdxs = keyIdxs.slice();
       }
     }
   });
@@ -788,12 +803,12 @@ if (mainCount > 0) {
       const aoa = sheetAOA[primarySheetKey] || [];
       const row = aoa[view.headerRowIdx + 1 + i] || [];   // 定位真实数据行
 
-      const hasRealCell = row.some(v => {
-        const s = String(v ?? '').replace(/\s+/g, '');
-        return s !== '' && s !== '0';
-      });
+      // evaluate emptiness based on primary key columns if available
+      const keyIdxs = (window.__primaryKeyIdxs && window.__primaryKeyIdxs.length)
+        ? window.__primaryKeyIdxs : null;
+      const isEmpty = isRowEffectivelyEmpty(row, keyIdxs);
 
-      if (!hasRealCell) {
+      if (isEmpty) {
         window.__skipRow = true;
       }
     })();
@@ -844,7 +859,7 @@ if (mainCount > 0) {
   // 保留原有 SHEIN 的 GroupIdentifier 逻辑
   if (IS_SHEIN && !header.includes('GroupIdentifier')) header.push('GroupIdentifier');
 
-  const aoa = [header].concat(output.map(o => header.map(c => o[c] || '')));
+  const aoa = [header].concat(output.map(o => header.map(c => (o[c] ?? ''))));
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
 
   // 日期列推断（维持你原逻辑）
