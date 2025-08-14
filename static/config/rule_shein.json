@@ -554,7 +554,7 @@
     "Format": "",
     "allow_input": "Y",
     "has_dropdown": "Y",
-    "dropdown_options": "CN, HK",
+    "dropdown_options": "CN, HK, VN",
     "default_value": ""
   },
   {
