@@ -19,14 +19,6 @@
     "FDAARRIVALTIME": "08:00"
   },
   {
-    "FDAPRODUCTCODE": "78",
-    "Delete_code": "N",
-    "FDAPROGRAMCODE": "",
-    "FDAPROCESSINGCODE": "",
-    "FDAINTENDEDUSECODE": "",
-    "FDAARRIVALTIME": ""
-  },
-  {
     "FDAPRODUCTCODE": "52",
     "Delete_code": "N",
     "FDAPROGRAMCODE": "FOO",
