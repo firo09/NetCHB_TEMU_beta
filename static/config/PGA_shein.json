@@ -1,5 +1,15 @@
 [
   {
+    "FDAPRODUCTCODE": "53HJL04",
+    "Description_contain": "",
+    "Error_fix": "53HJ-04",
+    "Delete_code": "N",
+    "FDAPROGRAMCODE": "COS",
+    "FDAPROCESSINGCODE": "",
+    "FDAINTENDEDUSECODE": "100.000",
+    "FDAARRIVALTIME": "08:00"
+  },
+  {
     "FDAPRODUCTCODE": "Anything_else",
     "Description_contain": "Commodity Description, nail",
     "Error_fix": "53HY-99",

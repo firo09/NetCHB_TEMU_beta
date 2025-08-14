@@ -774,6 +774,17 @@ if (mainCount > 0) {
       }
     }
     
+      // —— 若该行在所有 user_upload 字段均为空，则跳过该行（避免尾部多出空壳行）
+      const hasUploadData = ruleConfig.some(rc => {
+        if ((rc.Source || '').toString().trim().toLowerCase() !== 'user_upload') return false;
+        const v = out[rc.Column];
+        return v !== undefined && v !== null && String(v).trim() !== '';
+      });
+      if (!hasUploadData) {
+        // 跳过本行，不加入 output
+        continue;
+      }
+
     output.push(out);
 
     if ((i + 1) % 20 === 0 || i === main.length - 1) {
