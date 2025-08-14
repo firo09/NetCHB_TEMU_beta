@@ -541,40 +541,46 @@ async function generateAndDownload() {
   });
 
 
-  // ===== Determine primary data rows from CONFIG (no fallback) =====
-function _rowEmpty(r) {
-  if (!r) return true;
-  for (let i = 0; i < r.length; i++) {
-    const s = String(r[i] ?? '').replace(/\s+/g, ''); // 去空白符
-    if (s !== '' && s !== '0') return false;          // 空或“0”才算空
-  }
-  return true;
-}
-
+// ===== Determine primary data rows from CONFIG (revised logic) =====
 let mainCount = 0;
 let primarySheetKey = null;
 const sheetCandidates = new Set();
+
+// Helper function to check if a row is effectively empty (contains no real data)
+const isRowEffectivelyEmpty = (row) => {
+  if (!row || !Array.isArray(row) || row.length === 0) {
+    return true;
+  }
+  return !row.some(cell => {
+    const s = String(cell ?? '').trim();
+    return s !== '' && s !== '0';
+  });
+};
 
 for (const cfg of ruleConfig) {
   const src = (cfg.Source || '').toString().trim().toLowerCase();
   if (src !== 'user_upload') continue;
   const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
-  if (lookup === 'keyword_right') continue; // keyword-only fields don't drive rows
+  if (lookup === 'keyword_right') continue;
   const sk = (cfg.Sheet || '').toString().trim().toLowerCase();
-  if (!sk || sk === 'mawb') continue; // singleton sheet shouldn't drive rows
+  if (!sk || sk === 'mawb') continue;
   sheetCandidates.add(sk);
 }
 
 if (sheetCandidates.size > 0) {
   sheetCandidates.forEach(sk => {
     const view = sheetViews[sk];
-    const aoa  = sheetAOA[sk] || [];
+    const aoa = sheetAOA[sk] || [];
     if (view && view.headerRowIdx >= 0) {
-      const start = view.headerRowIdx + 1;
-      let end = aoa.length;
-      while (end > start && _rowEmpty(aoa[end-1])) end--;
-      const count = Math.max(0, end - start);
-      if (count > mainCount) { mainCount = count; primarySheetKey = sk; }
+      const dataRows = aoa.slice(view.headerRowIdx + 1);
+      // Filter out all empty rows from the data portion of the sheet
+      const nonEmptyRows = dataRows.filter(row => !isRowEffectivelyEmpty(row));
+      const count = nonEmptyRows.length;
+      
+      if (count > mainCount) {
+        mainCount = count;
+        primarySheetKey = sk;
+      }
     }
   });
 }
@@ -584,9 +590,9 @@ let main = [];
 if (mainCount > 0) {
   main = new Array(mainCount).fill(0);
 } else {
-  alert('配置未提供可驱动行数的 header 字段：\n' +
-        '- 请在规则中至少为一个 sheet 提供 Source=user_upload 且 Lookup!=keyword_right 的字段，\n' +
-        '  以便自动识别标题行并确定数据行数。');
+  alert('Could not find any data rows in the uploaded file.\n' +
+        '- Please ensure at least one sheet has a valid header and data rows.\n' +
+        '- The configuration must point to a header column in that sheet (Source=user_upload and Lookup!=keyword_right).');
   return;
 }
 
