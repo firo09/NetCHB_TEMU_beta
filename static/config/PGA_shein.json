@@ -1,5 +1,15 @@
 [
   {
+    "FDAPRODUCTCODE": "25JA-01",
+    "Description_contain": "",
+    "Error_fix": "53YY-99",
+    "Delete_code": "N",
+    "FDAPROGRAMCODE": "COS",
+    "FDAPROCESSINGCODE": "",
+    "FDAINTENDEDUSECODE": "100.000",
+    "FDAARRIVALTIME": "08:00"
+  },
+  {
     "FDAPRODUCTCODE": "53HJL04",
     "Description_contain": "",
     "Error_fix": "53HJ-04",
