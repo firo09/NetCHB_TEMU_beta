@@ -594,6 +594,9 @@ if (mainCount > 0) {
   const prog = document.getElementById('progress');
   const pt   = document.getElementById('progress-text');
   document.getElementById('progress-container').classList.remove('hidden');
+  // reset Error_fix hits for this run
+  window.__errorFixRows = [];
+
 
   for (let i = 0; i < main.length; i++) {
     const out = {};
@@ -679,47 +682,85 @@ if (mainCount > 0) {
       }
     })();
 
-    // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Error_fix 前缀替换）
+    // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Anything_else + Description_contain；Error_fix 记录原始值）
     (() => {
       const rawCode = (out.FDAPRODUCTCODE || '').toString();
       if (!rawCode) return;
 
-      // 1) 最长前缀匹配
-      let best = null;
-      let bestLen = -1;
+      // 应用规则并在发生 Error_fix 时记录原值+高亮行信息
+      const tryApplyRule = (rule) => {
+        if (!rule) return false;
+
+        const orig = out.FDAPRODUCTCODE;
+
+        // 1) Error_fix：前缀替换（长度 = Error_fix 长度）
+        if (rule.Error_fix) {
+          const fix = String(rule.Error_fix);
+          const n = fix.length;
+          out.FDAPRODUCTCODE = fix + rawCode.slice(n);
+
+          if (orig && orig !== out.FDAPRODUCTCODE) {
+            out.Original_ProductCode = orig;
+            (window.__errorFixRows ||= []).push({
+              row: i,                              // 当前输出行索引（从 0 开始）
+              codeBefore: orig,                        // FDAPRODUCTCODE before Error_fix
+              codeAfter: out.FDAPRODUCTCODE,           // FDAPRODUCTCODE after Error_fix
+              descHeader: rule.Description_contain || '' // 用于后续找“对应 header 的输出列”
+            });
+          }
+        }
+
+        // 2) Delete_code 优先级最高
+        if (rule.Delete_code === 'Y') {
+          out.FDAPRODUCTCODE = '';
+          Object.keys(rule).forEach(k => {
+            if (!['FDAPRODUCTCODE','Delete_code','Error_fix','Description_contain'].includes(k)) {
+              out[k] = '';
+            }
+          });
+          return true;
+        }
+
+        // 3) 复制其它字段（跳过标识字段；仅写有值的项）
+        Object.entries(rule).forEach(([k, v]) => {
+          if (['FDAPRODUCTCODE','Delete_code','Error_fix','Description_contain'].includes(k)) return;
+          if (v !== undefined && v !== null && v !== '') out[k] = v;
+        });
+
+        return true;
+      };
+
+      // A) 先做“最长前缀”常规匹配（显式排除 Anything_else）
+      let best = null, bestLen = -1;
       for (const rule of pgaRules) {
         const key = (rule.FDAPRODUCTCODE || '').toString();
-        if (!key) continue;
+        if (!key || key === 'Anything_else') continue;
         const n = key.length;
         if (rawCode.slice(0, n) === key && n > bestLen) {
-          best = rule;
-          bestLen = n;
+          best = rule; bestLen = n;
         }
       }
-      if (!best) return;
+      if (best) { tryApplyRule(best); return; }
 
-      // 2) 命中后先处理 Error_fix：用 Error_fix 覆盖左起 N（N=Error_fix 长度）
-      if (best.Error_fix) {
-        const fix = String(best.Error_fix);
-        const n = fix.length;
-        out.FDAPRODUCTCODE = fix + rawCode.slice(n);
+      // B) 兜底：匹配 FDAPRODUCTCODE = "Anything_else"
+      // 支持 Description_contain: "Header, keyword"
+      for (const rule of pgaRules.filter(r => (r.FDAPRODUCTCODE || '') === 'Anything_else')) {
+        let pass = true;
+        if (rule.Description_contain) {
+          const parts = String(rule.Description_contain).split(',');
+          if (parts.length >= 2) {
+            const header  = parts[0].trim();
+            const keyword = parts.slice(1).join(',').trim(); // 允许关键字内包含逗号
+            const view = sheetViews[primarySheetKey];
+            const cellVal = view?.getByHeaderRow(i, header) || '';
+            pass = String(cellVal).toLowerCase().includes(keyword.toLowerCase());
+          } else {
+            pass = false;
+          }
+        }
+        if (pass) { tryApplyRule(rule); return; }
       }
-
-      // 3) Delete_code 处理（优先级最高）
-      if (best.Delete_code === 'Y') {
-        out.FDAPRODUCTCODE = '';
-        Object.keys(best).forEach(k => {
-          if (k !== 'FDAPRODUCTCODE' && k !== 'Delete_code' && k !== 'Error_fix') out[k] = '';
-        });
-        return;
-      }
-
-      // 4) 复制其它字段（跳过标识字段；仅写有值的项）
-      Object.entries(best).forEach(([k, v]) => {
-        if (k === 'FDAPRODUCTCODE' || k === 'Delete_code' || k === 'Error_fix') return;
-        if (v !== undefined && v !== null && v !== '') out[k] = v;
-      });
-    })();                         
+    })();
 
     // —— 校验 ManufacturerPostalCode（所有客户适用） ——
     // 规则：若数字长度 < 6（且存在数字）或全部为 0，则替换为 528000
@@ -767,7 +808,17 @@ if (mainCount > 0) {
 
   // 写回
   const header = ruleConfig.map(r => r.Column);
+
+  // 如果任意一行存在 Original_ProductCode，则把该列插在 FDAPRODUCTCODE 右侧（若 FDAPRODUCTCODE 不在表头则追加到末尾）
+  if (output.some(o => o && typeof o === 'object' && o.Original_ProductCode) && !header.includes('Original_ProductCode')) {
+    const idxFDA = header.indexOf('FDAPRODUCTCODE');
+    if (idxFDA >= 0) header.splice(idxFDA + 1, 0, 'Original_ProductCode');
+    else header.push('Original_ProductCode');
+  }
+
+  // 保留原有 SHEIN 的 GroupIdentifier 逻辑
   if (IS_SHEIN && !header.includes('GroupIdentifier')) header.push('GroupIdentifier');
+
   const aoa = [header].concat(output.map(o => header.map(c => o[c] || '')));
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
 
@@ -876,6 +927,51 @@ if (mainCount > 0) {
 
   const mawbOrig = (document.getElementById(sanitize('MAWB'))?.value || currentDefaultMawb || '').trim();
   const tag = IS_SHEIN ? 'SHEIN' : 'TEMU';
+
+  // ==== Show red warning banner in the page if any Error_fix applied (EN only) ====
+  (function showErrorFixBanner(){
+    const pc = document.getElementById('progress-container');
+    if (!pc) return;
+
+    // remove old banner if exists
+    const old = document.getElementById('error-fix-banner');
+    if (old) old.remove();
+
+    const hits = Array.isArray(window.__errorFixRows) ? window.__errorFixRows : [];
+    if (!hits.length) return;
+
+    // build banner
+    const banner = document.createElement('div');
+    banner.id = 'error-fix-banner';
+    banner.style.color = '#b91c1c';          // red-700
+    banner.style.fontWeight = '700';
+    banner.style.marginTop = '10px';
+    banner.style.lineHeight = '1.5';
+
+    const summary = document.createElement('div');
+    summary.textContent = `⚠ ${hits.length} row(s) had FDAPRODUCTCODE automatically modified. Please review.`;
+    banner.appendChild(summary);
+
+    const details = document.createElement('div');
+    details.style.fontWeight = '600';
+    details.style.marginTop = '6px';
+    details.innerHTML = hits.map(h =>
+      `Row ${h.row + 1}: ${h.codeBefore || '(empty)'} → ${h.codeAfter || '(empty)'}`
+    ).join('<br>');
+    banner.appendChild(details);
+
+    pc.appendChild(banner);
+
+    // avoid sticking to the very top edge when scrolling
+    banner.style.scrollMarginTop = '120px';
+
+    // smooth-scroll after the DOM has painted
+    setTimeout(() => {
+      try { banner.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(_) {}
+    }, 100);
+  })();
+
+
   XLSX.writeFile(wb2, `${mawbOrig}_NETChb_${tag}.xlsx`);
 }
 
