@@ -545,8 +545,8 @@ async function generateAndDownload() {
 function _rowEmpty(r) {
   if (!r) return true;
   for (let i = 0; i < r.length; i++) {
-    const v = r[i];
-    if (v !== undefined && v !== null && String(v).trim() !== '') return false;
+    const s = String(r[i] ?? '').replace(/\s+/g, ''); // 去空白符
+    if (s !== '' && s !== '0') return false;          // 空或“0”才算空
   }
   return true;
 }
@@ -773,17 +773,25 @@ if (mainCount > 0) {
         out.ManufacturerPostalCode = '528000';
       }
     }
-    
-      // —— 若该行在所有 user_upload 字段均为空，则跳过该行（避免尾部多出空壳行）
-      const hasUploadData = ruleConfig.some(rc => {
-        if ((rc.Source || '').toString().trim().toLowerCase() !== 'user_upload') return false;
-        const v = out[rc.Column];
-        return v !== undefined && v !== null && String(v).trim() !== '';
+
+    // —— 基于主驱动 sheet 的真实行判空，整行仅空白或0就跳过（避免尾部空壳行） ——
+    (function skipIfPrimaryRowEmpty() {
+      const view = sheetViews[primarySheetKey];
+      if (!view || view.headerRowIdx < 0) return; // 没识别到主表就不拦
+
+      const aoa = sheetAOA[primarySheetKey] || [];
+      const row = aoa[view.headerRowIdx + 1 + i] || [];   // 定位真实数据行
+
+      const hasRealCell = row.some(v => {
+        const s = String(v ?? '').replace(/\s+/g, '');
+        return s !== '' && s !== '0';
       });
-      if (!hasUploadData) {
-        // 跳过本行，不加入 output
-        continue;
+
+      if (!hasRealCell) {
+        window.__skipRow = true;
       }
+    })();
+    if (window.__skipRow) { window.__skipRow = false; continue; }
 
     output.push(out);
 
