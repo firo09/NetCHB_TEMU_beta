@@ -764,21 +764,25 @@ if (mainCount > 0) {
       if (best) { tryApplyRule(best); return; }
 
       // B) 兜底：匹配 FDAPRODUCTCODE = "Anything_else"
-      // 支持 Description_contain: "Header, keyword"
+      // 支持 Description_contain: "Header: keyword, keyword"
       for (const rule of pgaRules.filter(r => (r.FDAPRODUCTCODE || '') === 'Anything_else')) {
         let pass = true;
+      //Anything_else支持多个关键词，Header: keyword, keyword
         if (rule.Description_contain) {
-          const parts = String(rule.Description_contain).split(',');
-          if (parts.length >= 2) {
-            const header  = parts[0].trim();
-            const keyword = parts.slice(1).join(',').trim(); // 允许关键字内包含逗号
+          const [headerPart, keywordPart] = rule.Description_contain.split(':');
+          if (headerPart && keywordPart) {
+            const header = headerPart.trim();
+            const keywords = keywordPart.split(',')
+                                        .map(s => s.trim().toLowerCase())
+                                        .filter(Boolean);
             const view = sheetViews[primarySheetKey];
-            const cellVal = view?.getByHeaderRow(i, header) || '';
-            pass = String(cellVal).toLowerCase().includes(keyword.toLowerCase());
+            const cellVal = (view?.getByHeaderRow(i, header) || '').toLowerCase();
+            pass = keywords.some(k => cellVal.includes(k));
           } else {
             pass = false;
           }
         }
+          
         if (pass) { tryApplyRule(rule); return; }
       }
     })();
@@ -1067,3 +1071,4 @@ document.addEventListener('DOMContentLoaded', () => {
   const df = document.getElementById('dynamic-form');
   if (df) observeNewInputs(df, 'neutral');
 });
+
