@@ -890,30 +890,68 @@ if (mainCount > 0) {
   const aoa = [header].concat(output.map(o => header.map(c => (o[c] ?? ''))));
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
 
-  // 日期列推断（维持你原逻辑）
-  const dateCols = ruleConfig
-    .map((r, idx) => ({ idx, fmt: (r.Format || '').toLowerCase() }))
-    .filter(r => r.fmt.includes('yyyy') && r.fmt.includes('m') && r.fmt.includes('d'))
-    .map(r => r.idx);
-
-  for (let r = 1; r < aoa.length; r++) {
-    for (const c of dateCols) {
-      const colLetter = XLSX.utils.encode_col(c);
-      const cellRef = colLetter + (r + 1);
-      const val = aoa[r][c];
-      if (!val) continue;
-      let d = new Date(val);
-      if (isNaN(d.getTime())) {
-        const m = String(val).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-        if (m) d = new Date(m[3], m[1] - 1, m[2]);
+  // === 日期/时间列（按配置 Format + 列名定位，适配动态表头顺序变动）===
+  (function applyDateTimeFormatsByHeader() {
+    // 1) 从配置里收集需要设定为日期/时间的列及其格式
+    //    规则：Format 同时包含 y / m / d（大小写不敏感）则视为日期/时间列
+    const colFmtMap = {};
+    ruleConfig.forEach(r => {
+      const fmt = String(r.Format || '');
+      const f = fmt.toLowerCase();
+      if (f && /y/.test(f) && /m/.test(f) && /d/.test(f)) {
+        colFmtMap[r.Column] = fmt; // 保留原格式串，如 "m/d/yyyy" 或 "m/d/yyyy h:mm"
       }
-      if (!isNaN(d.getTime())) {
+    });
+
+    // 没有需要处理的列就直接返回
+    const names = Object.keys(colFmtMap);
+    if (!names.length) return;
+
+    // 2) 依据“列名”在 header 里找出当前的列索引（适配 HTS-* 动态插列后的新顺序）
+    const targets = names
+      .map(name => ({ name, fmt: colFmtMap[name], idx: header.indexOf(name) }))
+      .filter(x => x.idx >= 0);
+
+    if (!targets.length) return;
+
+    // 3) 逐行写入单元格类型与格式
+    for (let r = 1; r < aoa.length; r++) {
+      for (const t of targets) {
+        const c = t.idx;
+        const colLetter = XLSX.utils.encode_col(c);
+        const cellRef = colLetter + (r + 1);
+        const raw = aoa[r][c];
+
+        if (raw == null || raw === '') continue;
+
+        // 尝试解析为日期（兼容 "m/d/yyyy"、"m-d-yyyy"、以及已有的 Date 对象）
+        let d = (raw instanceof Date) ? raw : new Date(raw);
+        if (isNaN(d.getTime())) {
+          // 简单兜底：匹配 m/d/yyyy 或 m-d-yyyy
+          const m = String(raw).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+          if (m) {
+            const mm = parseInt(m[1], 10) - 1;
+            const dd = parseInt(m[2], 10);
+            const yyyy = parseInt(m[3], 10);
+            const hh = m[4] ? parseInt(m[4], 10) : 0;
+            const min = m[5] ? parseInt(m[5], 10) : 0;
+            const ss = m[6] ? parseInt(m[6], 10) : 0;
+            d = new Date(yyyy, mm, dd, hh, min, ss);
+          }
+        }
+        if (isNaN(d.getTime())) continue;
+
+        // 写入 Excel 单元格为日期/时间，并使用配置中的格式串
+        if (!ws2[cellRef]) ws2[cellRef] = {};
         ws2[cellRef].t = 'd';
-        ws2[cellRef].z = 'm/d/yyyy';
         ws2[cellRef].v = d;
+        ws2[cellRef].z = String(t.fmt).replace(/Y/g, 'y').replace(/D/g, 'd'); // 兼容大小写
+        // 同步回 AOA（可选）
+        aoa[r][c] = d;
       }
     }
-  }
+  })();
+
 
 // === 新：FDAARRIVALTIME 列强制为“Time”格式（h:mm） ===
 (function formatFDAArrivalTimeAsTime() {
