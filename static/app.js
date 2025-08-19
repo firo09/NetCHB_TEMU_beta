@@ -686,9 +686,10 @@ if (mainCount > 0) {
       }
     
       if (best) {
-        ['HTS-1', 'HTS-2', 'HTS-3', 'HTS-4', 'HTS-5'].forEach(k => {
-          if (best[k]) out[k] = best[k];
-        });
+        Object.keys(best)
+          .filter(k => /^HTS-\d+$/.test(k)) // 仅匹配 HTS-数字
+          .sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1])) // 递增
+          .forEach(k => { out[k] = best[k]; });
       }
     })();
 
@@ -859,6 +860,22 @@ if (mainCount > 0) {
 
   // 写回
   const header = ruleConfig.map(r => r.Column);
+
+  // --- 动态把所有出现过的 HTS-* 列插到 HTS 右侧 ---
+  const htsIndex = header.indexOf('HTS');
+  if (htsIndex !== -1) {
+    const htsDynamicCols = Array.from(
+      new Set(
+        output.flatMap(o => Object.keys(o || {}).filter(k => /^HTS-\d+$/.test(k)))
+      )
+    ).sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1])); // 递增
+
+    // 从后往前插，避免索引位移
+    htsDynamicCols.slice().reverse().forEach(col => {
+      if (!header.includes(col)) header.splice(htsIndex + 1, 0, col);
+    });
+}
+
 
   // 如果任意一行存在 Original_ProductCode，则把该列插在 FDAPRODUCTCODE 右侧（若 FDAPRODUCTCODE 不在表头则追加到末尾）
   if (output.some(o => o && typeof o === 'object' && o.Original_ProductCode) && !header.includes('Original_ProductCode')) {
