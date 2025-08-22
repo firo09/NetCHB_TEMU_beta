@@ -989,66 +989,81 @@ if (mainCount > 0) {
   }
 })();
 
-  // ==== 如果存在 HTSValue 表头：将该列强制为 Number，保留两位小数 ====
-  // ==== 如果存在 GrossWeight 表头：将该列强制为 Number，保留原始精度 ====
-  (function formatHTSValueAndGrossWeight() {
-    // 处理 HTSValue
-    const colIndexHTS = header.indexOf('HTSValue');
-    if (colIndexHTS !== -1) {
-      for (let r = 1; r < aoa.length; r++) {
-        const rowIdx = r + 1;
-        const c = XLSX.utils.encode_col(colIndexHTS);
-        const cellRef = c + rowIdx;
+  // ==== 把 HTSValue / GrossWeight 列写成数值；仅 HTSValue 保留两位小数 ====
+  // 扩展性：往 numericHeaders 里加更多表头名即可复用
+  (function formatNumericColumns() {
+    const numericHeaders = new Set(['HTSValue', 'GrossWeight']);
 
-        let raw = aoa[r][colIndexHTS];
-        if (raw === undefined || raw === null || raw === '') continue;
-
-        if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
-        let num = Number(raw);
-        if (!isFinite(num)) continue;
-
-        // HTSValue 保留两位小数
-        num = Math.round(num * 100) / 100;
-
-        if (!ws2[cellRef]) ws2[cellRef] = { t: 'n', v: num, z: '0.00' };
-        else {
-          ws2[cellRef].t = 'n';
-          ws2[cellRef].v = num;
-          ws2[cellRef].z = '0.00';
-        }
-
-        aoa[r][colIndexHTS] = num;
+    // 工具：从原始字符串里推断小数位数（尽量保留原精度）
+    function inferDecimals(raw) {
+      if (raw === undefined || raw === null) return 0;
+      // 优先使用原始字符串推断（可以保留诸如 12.340 的尾零）
+      if (typeof raw === 'string') {
+        const s = raw.replace(/,/g, '').trim();
+        const m = s.match(/^[+-]?\d+(?:\.(\d+))?$/);
+        return m && m[1] ? m[1].length : 0;
       }
+      // 若原本就是数值，只能用字符串化结果推断（可能无法区分尾零）
+      const s = String(raw);
+      // 科学计数法时不强行设定位数，交给 Excel 自己显示
+      if (/e|E/.test(s)) return 0;
+      const m = s.match(/^[+-]?\d+(?:\.(\d+))?$/);
+      return m && m[1] ? m[1].length : 0;
     }
 
-    // 处理 GrossWeight
-    const colIndexGW = header.indexOf('GrossWeight');
-    if (colIndexGW !== -1) {
+    // 工具：根据小数位生成格式串（避免显示为 General）
+    function fmtFromDecimals(dec) {
+      return dec > 0 ? '0.' + '0'.repeat(dec) : '0';
+    }
+
+    for (let col = 0; col < header.length; col++) {
+      const headerName = header[col];
+      if (!numericHeaders.has(headerName)) continue;
+
+      const isHTS = headerName === 'HTSValue';
+
       for (let r = 1; r < aoa.length; r++) {
-        const rowIdx = r + 1;
-        const c = XLSX.utils.encode_col(colIndexGW);
+        const rowIdx = r + 1; // Excel 行号（含表头）
+        const c = XLSX.utils.encode_col(col);
         const cellRef = c + rowIdx;
 
-        let raw = aoa[r][colIndexGW];
+        let raw = aoa[r][col];
         if (raw === undefined || raw === null || raw === '') continue;
 
+        // 先推测原始小数位（在转 Number 之前）
+        const decPlaces = isHTS ? 2 : inferDecimals(raw);
+
+        // 去除逗号并转数值
         if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
         let num = Number(raw);
         if (!isFinite(num)) continue;
 
-        // GrossWeight 保留原始精度，不做 toFixed / Math.round
-        if (!ws2[cellRef]) ws2[cellRef] = { t: 'n', v: num };
-        else {
-          ws2[cellRef].t = 'n';
-          ws2[cellRef].v = num;
-          // 不设置 z，避免强制格式化小数位
+        // HTSValue 强制两位小数（数值型）并固定显示格式 0.00
+        // 其他列不改数值，仅按原小数位设置显示格式
+        let zfmt;
+        if (isHTS) {
+          num = Math.round(num * 100) / 100;
+          zfmt = '0.00';
+        } else {
+          zfmt = fmtFromDecimals(decPlaces); // 如 0 / 0.0 / 0.000 ...
         }
 
-        aoa[r][colIndexGW] = num;
+        // 写回 sheet 单元格（确保是数值 t:'n'），并设置 z 避免 General
+        if (!ws2[cellRef]) {
+          ws2[cellRef] = { t: 'n', v: num, z: zfmt };
+        } else {
+          ws2[cellRef].t = 'n';
+          ws2[cellRef].v = num;
+          ws2[cellRef].z = zfmt;
+        }
+
+        // 同步回 AOA（可选）
+        aoa[r][col] = num;
       }
     }
   })();
-  
+
+
   const wb2 = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb2, ws2, 'Sheet1');
 
