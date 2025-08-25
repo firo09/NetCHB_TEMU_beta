@@ -17,10 +17,10 @@
   },
   {
     "FDAPRODUCTCODE": "95",
-    "Delete_code": "Y",
-    "FDAPROGRAMCODE": "",
-    "FDAPROCESSINGCODE": "",
-    "FDAINTENDEDUSECODE": "",
+    "Delete_code": "N",
+    "FDAPROGRAMCODE": "REP",
+    "FDAPROCESSINGCODE": "RAD",
+    "FDAINTENDEDUSECODE": "100.000",
     "FDAARRIVALTIME": "08:00"
   }
 ]
