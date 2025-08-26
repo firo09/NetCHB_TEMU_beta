@@ -273,6 +273,40 @@
   window.addEventListener('load', alignSidebar);
   window.addEventListener('resize', alignSidebar);
 </script>
+<script>
+  (function () {
+    const ORIGINAL_TITLE = document.title;
+
+    function extractMAWB(str) {
+      if (!str) return null;
+      const m = String(str).match(/(?:^|[^0-9])(\d{3})[-\s]?(\d{8})(?!\d)/);
+      return m ? `${m[1]}-${m[2]}` : null; // 规范化为 3-8
+    }
+
+    function setTitleFromMAWB(mawbMaybe) {
+      const normalized = extractMAWB(mawbMaybe);
+      document.title = normalized || ORIGINAL_TITLE;
+      return normalized;
+    }
+
+    // 暴露给 app.js 或上传成功的回调直接用
+    window.updateTitleFromMAWB = setTitleFromMAWB;
+
+    // 监听本地选中文件时，从文件名兜底提取
+    const input = window.fileInput || document.getElementById('file-input');
+    if (input) {
+      input.addEventListener('change', () => {
+        let hit = null;
+        for (const f of (input.files || [])) {
+          hit = extractMAWB(f.name);
+          if (hit) break;
+        }
+        setTitleFromMAWB(hit);
+      });
+    }
+  })();
+</script>
+
 </body>
 
 </html>

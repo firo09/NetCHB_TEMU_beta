@@ -58,6 +58,17 @@ const generateBtn = document.getElementById('generate-btn');
 
 let ruleConfig = [], htsData = [], midData = [], pgaRules = [];
 
+// === MID 替换：全局状态 ===
+window.__midReplaceEnabled = false;
+window.__midReplaceRowsSet = new Set(); // 存储“包含表头”的行号（Number），如 361、4330 等
+
+function __parseRowsInputToSet(inputText) {
+  // 允许形式： "Rows: 361, 4330, 4676" 或随意空格/中英文逗号
+  if (!inputText) return new Set();
+  const nums = (inputText.match(/\d+/g) || []).map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0);
+  return new Set(nums);
+}
+
 
 // ===== 自绘下拉：样式注入 + 构建 =====
 (function injectSelectStyles(){
@@ -308,6 +319,8 @@ if (document.readyState === 'loading') {
         uploadBtn.innerHTML = '✅ File uploaded successfully';
       }
     }
+  // ✅ 新增这一行：让标题立刻变成 "123-45678901"
+  window.updateTitleFromMAWB?.(currentDefaultMawb);
   });
 
   // 记录 Port/Date 选择
@@ -332,7 +345,72 @@ if (document.readyState === 'loading') {
 // 渲染动态表单，并根据 Port/Date 做覆盖
 function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   const formEl = document.getElementById('dynamic-form');
+  // ===== 顶部：Replace MID with Manufacturer Name and Address 开关 + 输入框 =====
+  // 容器
+  const midBox = document.createElement('div');
+  midBox.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mb-2';
+
+  // 开关行
+  const switchRow = document.createElement('div');
+  switchRow.className = 'flex items-center justify-between';
+
+  const switchLabel = document.createElement('label');
+  switchLabel.className = 'font-semibold text-slate-700';
+  switchLabel.textContent = 'Replace MID with Manufacturer Name and Address';
+
+  const switchInput = document.createElement('input');
+  switchInput.type = 'checkbox';
+  switchInput.id = 'midreplace-toggle';
+  switchInput.className = 'h-5 w-5 accent-blue-600 cursor-pointer';
+
+  switchRow.appendChild(switchLabel);
+  switchRow.appendChild(switchInput);
+  midBox.appendChild(switchRow);
+
+  // 提示 + 文本框（默认隐藏）
+  const inputWrap = document.createElement('div');
+  inputWrap.className = 'mt-3 hidden';
+  inputWrap.id = 'midreplace-input-wrap';
+
+  // 提示行：Please enter the content in (parentheses) —— 括号文字标红（沿用错误红色）
+  const tip = document.createElement('div');
+  tip.className = 'text-sm text-slate-600 mb-1';
+  tip.innerHTML = 'Please enter the content in <span style="color:red;">parentheses</span>';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'midreplace-rows';
+  input.className = 'ui-input w-full italic text-gray-500';
+  input.placeholder = 'Rows: 361, 4330, 4676, 5475, 6870, 9340, 9354, 9377';
+
+  inputWrap.appendChild(tip);
+  inputWrap.appendChild(input);
+  midBox.appendChild(inputWrap);
+
+  // 事件：开关控制显示/隐藏
+  switchInput.addEventListener('change', () => {
+    window.__midReplaceEnabled = switchInput.checked;
+    inputWrap.classList.toggle('hidden', !switchInput.checked);
+    // 每次切换时重算行集合
+    window.__midReplaceRowsSet = __parseRowsInputToSet(document.getElementById('midreplace-rows')?.value || '');
+  });
+
+  // 事件：输入变化 → 解析行号集合
+  input.addEventListener('input', () => {
+    window.__midReplaceRowsSet = __parseRowsInputToSet(input.value || '');
+    // placeholder 自然由浏览器处理：非空时不显示
+    // 为了视觉统一，用户一旦输入，把斜体/灰色去掉，仅显示用户输入
+    if ((input.value || '').trim().length > 0) {
+      input.classList.remove('italic','text-gray-500');
+    } else {
+      input.classList.add('italic','text-gray-500');
+    }
+  });
+
   formEl.innerHTML = '';
+
+  // 插到表单网格的最前面
+  formEl.appendChild(midBox);
 
   const labels = [];
   const primaryRuleFor = {};
@@ -693,9 +771,21 @@ if (mainCount > 0) {
       }
     })();
 
-    // MID 映射并清空
+    // MID 映射并清空（支持“Replace MID...” 开关的例外）
     (() => {
       const nm  = (out.ManufacturerName || '').trim();
+
+      // 计算“导出文件行号（含表头）”：header=第1行，数据从第2行开始
+      const exportRowNumber = i + 2;
+
+      const keepNameAddrThisRow =
+        !!window.__midReplaceEnabled &&
+        window.__midReplaceRowsSet instanceof Set &&
+        window.__midReplaceRowsSet.has(exportRowNumber);
+
+      // 如果此行需要“保留名称与地址、删除 MID”，则不执行映射清空逻辑
+      if (keepNameAddrThisRow) return;
+
       const hit = midData.find(r => nm.includes(r.ManufacturerName));
       if (hit) {
         out.ManufacturerCode = hit.ManufacturerCode || '';
@@ -703,6 +793,7 @@ if (mainCount > 0) {
           .forEach(f => out[f] = '');
       }
     })();
+
 
     // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Anything_else + Description_contain；Error_fix 记录原始值）
     (() => {
@@ -806,6 +897,27 @@ if (mainCount > 0) {
         }
       }
     }
+
+    // ===== 最终收口：根据开关与用户指定的“包含表头的行号”决定清空哪几列 =====
+    (function finalizeManufacturerColumns() {
+      const exportRowNumber = i + 2; // 1=表头，2起为数据
+      const five = ['ManufacturerName','ManufacturerStreetAddress','ManufacturerCity','ManufacturerPostalCode','ManufacturerCountry'];
+
+      if (window.__midReplaceEnabled) {
+        const inKeepSet = window.__midReplaceRowsSet instanceof Set && window.__midReplaceRowsSet.has(exportRowNumber);
+        if (inKeepSet) {
+          // 这些行：删除 MID（ManufacturerCode），保留五列
+          out.ManufacturerCode = '';
+        } else {
+          // 其他行：删除五列，保留/映射到的 MID
+          five.forEach(f => { out[f] = ''; });
+        }
+      } else {
+        // 开关关闭：始终删除五列
+        five.forEach(f => { out[f] = ''; });
+      }
+    })();
+
 
     // —— 基于主驱动 sheet 的真实行判空，整行仅空白或0就跳过（避免尾部空壳行） ——
     (function skipIfPrimaryRowEmpty() {
@@ -1114,7 +1226,15 @@ if (mainCount > 0) {
   })();
 
 
-  XLSX.writeFile(wb2, `${mawbOrig}_NETChb_${tag}.xlsx`);
+  let outFileName = `${mawbOrig}_NETChb_${tag}.xlsx`;
+
+  // 如果开启了 Replace MID 开关，加前缀 Fixed_
+  if (window.__midReplaceEnabled) {
+    outFileName = `Fixed_${outFileName}`;
+  }
+
+  XLSX.writeFile(wb2, outFileName);
+
 }
 
 
