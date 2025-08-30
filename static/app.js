@@ -1380,6 +1380,21 @@ if (mainCount > 0) {
     header.push('GroupIdentifier');
 }
 
+  // === 最后一步（导出前）：Consolidated 模式下把 "Manifest Qty Piece count" 全部置为 1 ===
+  if (window.__isConsolidatedShipment) {
+    const targetCol = 'Manifest Qty Piece count';
+    // 只有当最终导出的表头里包含该列时才执行覆盖
+    if (header.includes(targetCol)) {
+      for (const row of output) {
+        if (row && typeof row === 'object') {
+          row[targetCol] = 1;
+        }
+      }
+    }
+  }
+
+
+  // 然后再生成 aoa 与工作表
   const aoa = [header].concat(output.map(o => header.map(c => (o[c] ?? ''))));
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
 
