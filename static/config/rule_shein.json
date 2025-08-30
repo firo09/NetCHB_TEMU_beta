@@ -84,6 +84,20 @@
     "default_value": ""
   },
   {
+    "Column": "ImporterID",
+    "Source": "fixed",
+    "Value": "2567947",
+    "Reference": "",
+    "Sheet": "",
+    "Lookup": "",
+    "Label": "",
+    "Parsing": "",
+    "Format": "",
+    "allow_input": "",
+    "has_dropdown": "",
+    "dropdown_options": "",
+    "default_value": ""
+  },{
     "Column": "DescOfMerchandise",
     "Source": "user_upload",
     "Value": "",
