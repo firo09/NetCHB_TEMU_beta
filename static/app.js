@@ -291,6 +291,7 @@ let htsData = [], midData = [], pgaRules = [];
 // === MID 替换：全局状态 ===
 window.__midReplaceEnabled = false;
 window.__midReplaceRowsSet = new Set(); // 存储“包含表头”的行号（Number），如 361、4330 等
+window.__roundUpPgaQtyEnabled = false;  // 勾选“Auto-adjust…”时为 true
 
 function __parseRowsInputToSet(inputText) {
   // 允许形式： "Rows: 361, 4330, 4676" 或随意空格/中英文逗号
@@ -712,7 +713,7 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   banner.style.color = '#92400e';                 // amber-800
   banner.style.borderRadius = '12px';
   banner.style.padding = '12px 16px';
-  banner.style.marginBottom = '10px';
+  banner.style.marginBottom = '12px';
   banner.style.boxShadow = '0 4px 16px rgba(146,64,14,0.08)';
   banner.style.fontWeight = '700';
   banner.style.display = 'flex';
@@ -736,24 +737,20 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   // ===== 顶部：Replace MID with Manufacturer Name and Address 开关 + 输入框 =====
   // 容器
   const midBox = document.createElement('div');
-  midBox.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mb-2';
+  midBox.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mt-2';
+  midBox.style.marginTop = '4px';
+  midBox.style.marginBottom = '0';
 
-  // 开关行
-  const switchRow = document.createElement('div');
-  switchRow.className = 'flex items-center justify-between';
+  // 开关行（左侧复选框风格）
+  midBox.innerHTML = `
+    <label class="inline-flex items-center gap-2 cursor-pointer">
+      <input id="midreplace-toggle" type="checkbox" class="h-5 w-5 accent-blue-600">
+      <span class="text-slate-700 font-semibold">Replace MID with Manufacturer Name and Address</span>
+    </label>
+  `;
 
-  const switchLabel = document.createElement('label');
-  switchLabel.className = 'font-semibold text-slate-700';
-  switchLabel.textContent = 'Replace MID with Manufacturer Name and Address';
-
-  const switchInput = document.createElement('input');
-  switchInput.type = 'checkbox';
-  switchInput.id = 'midreplace-toggle';
-  switchInput.className = 'h-5 w-5 accent-blue-600 cursor-pointer';
-
-  switchRow.appendChild(switchLabel);
-  switchRow.appendChild(switchInput);
-  midBox.appendChild(switchRow);
+  // 不额外设置 marginBottom，保持默认
+  midBox.style.marginTop = '0';
 
   // 提示 + 文本框（默认隐藏）
   const inputWrap = document.createElement('div');
@@ -774,6 +771,19 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   inputWrap.appendChild(tip);
   inputWrap.appendChild(input);
   midBox.appendChild(inputWrap);
+
+  // 事件：开关控制显示/隐藏（用 querySelector 取到新复选框）
+  const switchInput = midBox.querySelector('#midreplace-toggle');
+  switchInput.checked = !!window.__midReplaceEnabled;
+  inputWrap.classList.toggle('hidden', !switchInput.checked);
+
+  switchInput.addEventListener('change', () => {
+    window.__midReplaceEnabled = switchInput.checked;
+    inputWrap.classList.toggle('hidden', !switchInput.checked);
+    window.__midReplaceRowsSet = __parseRowsInputToSet(
+      document.getElementById('midreplace-rows')?.value || ''
+    );
+  });
 
   // 事件：开关控制显示/隐藏
   switchInput.addEventListener('change', () => {
@@ -799,6 +809,45 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
 
   // 插到表单网格的最前面
   formEl.appendChild(midBox);
+
+  // ===== 在 Consolidated Shipment 与 Replace MID 之间插入 Auto-adjust（无说明文字）=====
+  try {
+    // 只有当导出表里会含 FDAPRODUCTCODE 才显示此选项
+    const hasFDACode = Array.isArray(ruleConfig) &&
+                       ruleConfig.some(r => String(r.Column).trim() === 'FDAPRODUCTCODE');
+
+    if (hasFDACode) {
+      // 容器（与 MID 同风格）
+      const pgaRow = document.createElement('div');
+      pgaRow.id = 'row-pga-roundup';
+      pgaRow.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mt-2';
+      pgaRow.style.marginTop = '4px';
+      pgaRow.style.marginBottom = '0';
+
+      // 左侧复选框 + 标题（无额外描述）
+      pgaRow.innerHTML = `
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input id="chk-roundup-pga" type="checkbox" class="h-5 w-5 accent-blue-600">
+          <span class="text-slate-700 font-semibold">Auto-adjust PGA QTY less than 1 to 1</span>
+        </label>
+      `;
+
+      // 调整上下边距，避免和横幅/下方块产生大缝
+      pgaRow.style.marginTop = '0';
+      pgaRow.style.marginBottom = '-10px';   // 只管和 Replace MID 的间距
+
+      // 放到 midBox 前面（让它居于 Consolidated 横幅与 MID 框之间）
+      formEl.insertBefore(pgaRow, midBox);
+
+      // 同步/监听勾选态
+      const chkPga = pgaRow.querySelector('#chk-roundup-pga');
+      chkPga.checked = !!window.__roundUpPgaQtyEnabled;
+      chkPga.addEventListener('change', e => {
+        window.__roundUpPgaQtyEnabled = !!e.target.checked;
+      });
+    }
+  } catch (_) {}
+
 
   const labels = [];
   const primaryRuleFor = {};
@@ -1328,6 +1377,13 @@ if (mainCount > 0) {
 
     // 基于主列 HTS + GrossWeight/Manifest Qty Piece count，计算两个数量（没列名时不会写出）
     attachHtsQty(out);
+
+    // 若勾选“Auto-adjust PGA QTY...”：FDAPRODUCTCODE 有值且 HTSQty < 1 的行，把 HTSQty 调为 1
+    if (window.__roundUpPgaQtyEnabled) {
+      const hasFda = (out.FDAPRODUCTCODE ?? '') !== '';
+      const qtyNum = Number(String(out.HTSQty ?? '').replace(/,/g, ''));
+      if (hasFda && isFinite(qtyNum) && qtyNum < 1) out.HTSQty = 1;
+    }
     
     output.push(out);
 
@@ -1500,7 +1556,7 @@ if (mainCount > 0) {
   // ==== 把 HTSValue / GrossWeight 列写成数值；仅 HTSValue 保留两位小数 ====
   // 扩展性：往 numericHeaders 里加更多表头名即可复用
   (function formatNumericColumns() {
-    const numericHeaders = new Set(['HTSValue', 'GrossWeight']);
+    const numericHeaders = new Set(['HTSValue', 'GrossWeight', 'HTSQty', 'HTSQty2']);
 
     // 工具：从原始字符串里推断小数位数（尽量保留原精度）
     function inferDecimals(raw) {
@@ -1627,6 +1683,11 @@ if (mainCount > 0) {
   // 如果开启了 Replace MID 开关，加前缀 Fixed_
   if (window.__midReplaceEnabled) {
     outFileName = `Fixed_${outFileName}`;
+  }
+
+  // 如果勾选了“Auto-adjust PGA QTY…”，文件名加后缀 _RoundedUp
+  if (window.__roundUpPgaQtyEnabled) {
+    outFileName = outFileName.replace(/\.xlsx$/i, '_RoundedUp.xlsx');
   }
 
   XLSX.writeFile(wb2, outFileName);
