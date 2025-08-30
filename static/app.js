@@ -21,8 +21,8 @@ const IS_SHEIN = (document.body && document.body.getAttribute('data-client') ===
 
 // 根据客户选择不同的配置文件名（SHEIN 使用 *_shein.json）
 const CONFIG_FILES = IS_SHEIN
-  ? { rule: 'rule_shein.json', hts: 'hts_shein.json', mid: 'mid_shein.json', pga: 'PGA_shein.json' }
-  : { rule: 'rule.json',       hts: 'hts.json',        mid: 'mid.json',        pga: 'PGA.json'       };
+  ? { rule: 'rule_shein.json', rule_consolidated: 'rule_consolidated_shein.json', hts: 'hts_shein.json', mid: 'mid_shein.json', pga: 'PGA_shein.json' }
+  : { rule: 'rule.json',       rule_consolidated: 'rule_consolidated.json',       hts: 'hts.json',        mid: 'mid.json',        pga: 'PGA.json'       };
 
 // 全局保存当前文件、默认 MAWB、预选项
 let currentFile = null;
@@ -34,6 +34,223 @@ let selectedDateKey = ''; // '', 'today', 'tomorrow'
 const ts = Date.now();
 const CONFIG_PATH = 'config';
 
+// ==== 单位换算（值=1单位等于多少“基准单位”） ====
+// 重量：以 kg 为基
+const KG_FACTORS = {
+  "mg": 1e-6, "cgm": 1e-5, "g": 1e-3, "ckg": 0.1, "kg": 1.0, "t": 1000.0,
+  "car": 0.0002, "gr": 0.00006479891, "osg": 0.028349523125, "oz": 0.028349523125,
+  "lb": 0.45359237, "kg cmsc": 1.0
+};
+// 计数：以 pcs 为基
+const PCS_FACTORS = {
+  "pcs": 1, "no.": 1, "prs.": 1, "doz.": 12, "doz. prs.": 24
+};
+// 统一单位字符串
+function normUnit(u){ return String(u||'').trim().toLowerCase(); }
+
+// —— 只基于主列 HTS 计算 HTSQty / HTSQty2 ——
+// 规则：重量单位 → 数量 = GrossWeight(kg) ÷ KG_FACTORS[unit]（三位小数）
+//      计数单位 → 数量 = Piece(pcs)      ÷ PCS_FACTORS[unit]（三位小数）
+//      配不到单位或数据缺失 → 空串
+function attachHtsQty(row){
+  const hts = String(row['HTS'] || '').replace(/\D/g, '');
+  if (!hts) return;
+  const cfg = (window.__unitConfig || {})[hts];
+  if (!cfg) return;
+
+  const kg  = Number(String(row['GrossWeight'] || '').replace(/,/g,'')) || 0;           // 已以 kg 计
+  const pcs = Number(String(row['Manifest Qty Piece count'] || '').replace(/,/g,'')) || 0; // 已以 pcs 计
+
+  function calc(uLabel){
+    if (!uLabel) return '';
+    const u = normUnit(uLabel);
+    if (KG_FACTORS[u] !== undefined)  return (kg  / KG_FACTORS[u]).toFixed(3);
+    if (PCS_FACTORS[u] !== undefined) return (pcs / PCS_FACTORS[u]).toFixed(3);
+    return '';
+  }
+
+  const q1 = calc(cfg.Unit1 || cfg.unit1);
+  const q2 = calc(cfg.Unit2 || cfg.unit2);
+  if (q1) row['HTSQty']  = q1;
+  if (q2) row['HTSQty2'] = q2;
+}
+
+
+// ==== 新增：是否 TEMU（留好多客户扩展位）====
+const IS_TEMU = (typeof IS_SHEIN !== 'undefined') ? !IS_SHEIN : true;
+
+// ==== 新增：合单判定所用的表头名（可被外部覆盖）====
+// 优先级：window.__CONSOLIDATE_HEADER > <body data-consolidate-header="..."> > 默认值
+const CONSOLIDATE_HEADER_KEY =
+  (window.__CONSOLIDATE_HEADER) ||
+  (document.body && document.body.getAttribute('data-consolidate-header')) ||
+  'consignor_item_id';
+
+// ==== 合单检测规范====
+// 每个客户：指定只检查的 sheet 以及要匹配的表头名列表（可写别名）
+const CONSOLIDATE_DETECT_SPEC = {
+  temu:  { sheet: 'hawb', headers: ['consignor_item_id'] }
+};
+
+// 识别当前客户（优先 HTML 上 data-client，其次 IS_SHEIN 开关）
+function getClientId() {
+  const v = (document.body && document.body.getAttribute('data-client')) || '';
+  if (v) return v.trim().toLowerCase();
+  return (typeof IS_SHEIN !== 'undefined' && IS_SHEIN) ? 'shein' : 'temu';
+}
+
+// 归一化工具：忽略大小写、空格、下划线、短横线及其他符号
+const canon = s => String(s ?? '')
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '')
+  .replace(/[^a-z0-9]/g, '');
+
+// 解析“本次要检查的 sheet 与表头键”
+// 允许通过 window.__CONSOLIDATE_SHEET / window.__CONSOLIDATE_HEADER（字符串或数组）覆盖
+function resolveConsolidateDetectSettings() {
+  const client = getClientId();
+  const def = CONSOLIDATE_DETECT_SPEC[client] || { sheet: 'hawb', headers: ['consignor_item_id'] };
+
+  // 覆盖（可选）
+  const sheetOverride =
+    (window.__CONSOLIDATE_SHEET) ||
+    (document.body && document.body.getAttribute('data-consolidate-sheet'));
+
+  let headersOverride = (window.__CONSOLIDATE_HEADER) ||
+    (document.body && document.body.getAttribute('data-consolidate-header'));
+
+  // 支持字符串或数组
+  if (headersOverride && !Array.isArray(headersOverride)) {
+    headersOverride = [String(headersOverride)];
+  }
+
+  const sheetKey = String(sheetOverride || def.sheet || 'hawb').trim().toLowerCase();
+  const headerList = (headersOverride && headersOverride.length ? headersOverride : def.headers || ['consignor_item_id'])
+    .map(h => String(h));
+
+  return { sheetKey, headerList };
+}
+
+// ===== Shein 分组（可给 TEMU-合单复用）=====
+// options.respectHouseAwb=true 时：先按 House AWB 捆绑，再以 998 上限装箱（FFD 贪心）
+// 否则：均匀切块（保持你原来 SHEIN 的分组风格）
+function applySheinGrouping(output, { respectHouseAwb = false } = {}) {
+  const MAX_PER_GROUP = 998; // 如需调整，可改这里或外部注入 window.__SHEIN_GROUP_MAX
+  const cap = Number.isFinite(window.__SHEIN_GROUP_MAX) ? Math.max(1, +window.__SHEIN_GROUP_MAX) : MAX_PER_GROUP;
+
+  if (!Array.isArray(output) || output.length === 0) return;
+
+  if (!respectHouseAwb) {
+    // === 原来的均匀分组（每组≤cap，尽量均分） ===
+    const total = output.length;
+    const groups = Math.ceil(total / cap);
+    if (groups <= 0) return;
+    const base = Math.floor(total / groups);
+    const extra = total % groups;
+    const sizes = Array.from({ length: groups }, (_, i) => base + (i < extra ? 1 : 0));
+    let idx = 0, gid = 1;
+    for (const sz of sizes) {
+      for (let k = 0; k < sz && idx < total; k++, idx++) {
+        if (output[idx] && typeof output[idx] === 'object') {
+          output[idx]['GroupIdentifier'] = gid;
+        }
+      }
+      gid++;
+    }
+    return;
+  }
+
+  // === 合单模式：House AWB 相同必须同组（在 ≤cap 的前提下） ===
+  // 1) 先按 House AWB 捆绑
+  const keyName = 'House AWB';
+  const bundlesMap = new Map(); // key -> index[]
+  for (let i = 0; i < output.length; i++) {
+    const row = output[i] || {};
+    const key = String(row[keyName] ?? '').trim();
+    const k = key || `__EMPTY__`; // 空值也单独成组，避免跨行混淆
+    if (!bundlesMap.has(k)) bundlesMap.set(k, []);
+    bundlesMap.get(k).push(i);
+  }
+  const bundles = Array.from(bundlesMap.entries()).map(([k, arr]) => ({ key: k, idxs: arr, size: arr.length }));
+
+  // 2) 如果某个 House 超过上限，无法同时满足“≤cap 且同组”，此时仅能拆分（记录警告）
+  const huge = bundles.filter(b => b.size > cap);
+  if (huge.length) {
+    console.warn('[Grouping] Some House AWB sizes exceed cap and must be split:', huge.map(h => ({ house:h.key, size:h.size })));
+  }
+
+  // 3) 按 size 降序做 First-Fit-Decreasing 装箱
+  bundles.sort((a,b) => b.size - a.size);
+  const groups = []; // {count:number, chunks: number[][]}
+  for (const b of bundles) {
+    if (b.size <= cap) {
+      let placed = false;
+      for (const g of groups) {
+        if (g.count + b.size <= cap) {
+          g.chunks.push(b.idxs);
+          g.count += b.size;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) groups.push({ count: b.size, chunks: [b.idxs] });
+    } else {
+      // 必须拆分：按 cap 切段，尽量连续
+      for (let s = 0; s < b.size; s += cap) {
+        const chunk = b.idxs.slice(s, s + cap);
+        groups.push({ count: chunk.length, chunks: [chunk] });
+      }
+    }
+  }
+
+  // 4) 写入 GroupIdentifier
+  let gid = 1;
+  for (const g of groups) {
+    for (const chunk of g.chunks) {
+      for (const idx of chunk) {
+        if (output[idx] && typeof output[idx] === 'object') {
+          output[idx]['GroupIdentifier'] = gid;
+        }
+      }
+    }
+    gid++;
+  }
+}
+
+
+// ==== 新增：区分“基础规则 / 合单规则 / 当前激活规则”====
+let baseRuleConfig = [];
+let ruleConsolidatedConfig = [];
+let ruleConfig = [];               // 全局“当前激活”的规则（其余逻辑全部沿用它）
+window.__isConsolidatedShipment = false;   // 供 UI 使用
+
+// === Button loading helpers ===
+function ensureSpinnerCss() {
+  if (document.getElementById('btn-spinner-style')) return;
+  const style = document.createElement('style');
+  style.id = 'btn-spinner-style';
+  style.textContent = `
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .btn--loading{position:relative; pointer-events:none; opacity:.8}
+    .btn--loading .btn__label{visibility:hidden}
+    .btn--loading::after{
+      content:""; position:absolute; top:50%; left:50%;
+      width:16px; height:16px; margin:-8px 0 0 -8px; border-radius:50%;
+      border:2px solid currentColor; border-top-color:transparent;
+      animation:spin .6s linear infinite;
+    }`;
+  document.head.appendChild(style);
+}
+function lockButton(btn){
+  ensureSpinnerCss();
+  btn.classList.add('btn--loading');
+  btn.disabled = true;
+}
+function unlockButton(btn){
+  btn.classList.remove('btn--loading');
+  btn.disabled = false;
+}
+
 // 入口页或 shein/temu 页都有这些元素（入口页不会加载 app.js）
 const uploadBtn   = document.getElementById('upload-btn');
 const fileInput   = document.getElementById('file-input');
@@ -42,6 +259,19 @@ const continueBtn = document.getElementById('continue-btn');
 const portSel     = document.getElementById('pref-port');
 const dateSel     = document.getElementById('pref-date');
 const generateBtn = document.getElementById('generate-btn');
+(function initButtonLabels(){
+  ['continue-btn', 'generate-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn && !btn.querySelector('.btn__label')) {
+      const t = btn.textContent;
+      btn.textContent = '';
+      const span = document.createElement('span');
+      span.className = 'btn__label';
+      span.textContent = t;
+      btn.appendChild(span);
+    }
+  });
+})();
 // 统一 TEMU 主题色（#0071bc）
 (function applyTemuTheme(){
   if (typeof IS_SHEIN === 'undefined' || IS_SHEIN) return;
@@ -56,7 +286,7 @@ const generateBtn = document.getElementById('generate-btn');
   if (activeNav) { activeNav.style.background = temuBlue; activeNav.style.color = '#fff'; }
 })();
 
-let ruleConfig = [], htsData = [], midData = [], pgaRules = [];
+let htsData = [], midData = [], pgaRules = [];
 
 // === MID 替换：全局状态 ===
 window.__midReplaceEnabled = false;
@@ -182,13 +412,43 @@ function getValueFromMawbSheet(mawbSheetArr, colName) {
 function sanitize(label) { return label.replace(/[^\w]/g, '_'); }
 
 function parseValue(val, parsing) {
-  if (!parsing || parsing.toLowerCase() === 'raw') return val;
-  const leftMatch = parsing.match(/^left\((\d+)\)$/i);
-  if (leftMatch) return (val || '').toString().slice(0, parseInt(leftMatch[1], 10));
-  const rightMatch = parsing.match(/^right\((\d+)\)$/i);
+  if (!parsing) return val;
+
+  const p = String(parsing).trim();
+
+  // === 新增：字母数字清洗 + 左/右截取（大小写不敏感） ===
+  // abcRight(x): 先去除非字母数字，再取右数 x 个字符
+  {
+    const m = p.match(/^abcRight\(\s*(\d+)\s*\)$/i);
+    if (m) {
+      const n = parseInt(m[1], 10) || 0;
+      const s = (val ?? '').toString().replace(/[^A-Za-z0-9]/g, '');
+      if (n <= 0) return '';
+      return s.slice(-n); // 不足 n 时返回全部
+    }
+  }
+  // abcLeft(y): 先去除非字母数字，再取左数 y 个字符
+  {
+    const m = p.match(/^abcLeft\(\s*(\d+)\s*\)$/i);
+    if (m) {
+      const n = parseInt(m[1], 10) || 0;
+      const s = (val ?? '').toString().replace(/[^A-Za-z0-9]/g, '');
+      if (n <= 0) return '';
+      return s.slice(0, n); // 不足 y 时返回全部
+    }
+  }
+
+  // === 兼容你原来的 left(n) / right(n) 规则 ===
+  const leftMatch  = p.match(/^left\((\d+)\)$/i);
+  if (leftMatch)  return (val || '').toString().slice(0, parseInt(leftMatch[1], 10));
+
+  const rightMatch = p.match(/^right\((\d+)\)$/i);
   if (rightMatch) return (val || '').toString().slice(-parseInt(rightMatch[1], 10));
+
+  // 其它未识别：原样返回
   return val;
 }
+
 
 
 // —— 新增：自动识别标题行 + 关键词右侧取值（通用视图） —— 
@@ -265,18 +525,29 @@ function __startConfigLoad() {
 
   loadingMsg.innerText = 'Loading configuration...';
 
-  const safeFetch = (url, fallback) => fetch(url).then(r => r.ok ? r.json() : fallback).catch(() => fallback);
+  const safeFetch = (url, fallback) =>
+    fetch(url).then(r => r.ok ? r.json() : fallback).catch(() => fallback);
 
-  safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.rule}?ts=${ts}`, null).then(rule => {
+  // 同时加载：rule + rule_consolidated + 其余数据
+  Promise.all([
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.rule}?ts=${ts}`, null),
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.rule_consolidated}?ts=${ts}`, []),
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.hts}?ts=${ts}`, []),
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.mid}?ts=${ts}`, []),
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.pga}?ts=${ts}`, []),
+    safeFetch(`${CONFIG_PATH}/unit.json?ts=${ts}`, {})
+  ]).then(([rule, ruleCons, hts, mid, pga, unitCfg]) => {
     if (!rule) throw new Error('rule config missing');
-    return Promise.all([
-      Promise.resolve(rule),
-      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.hts}?ts=${ts}`, []),
-      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.mid}?ts=${ts}`, []),
-      safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.pga}?ts=${ts}`, [])
-    ]);
-  }).then(([rule, hts, mid, pga]) => {
-    ruleConfig = rule; htsData = hts; midData = mid; pgaRules = pga;
+
+    baseRuleConfig         = rule || [];
+    ruleConsolidatedConfig = Array.isArray(ruleCons) ? ruleCons : [];
+    ruleConfig             = baseRuleConfig;   // 初始使用常规规则
+
+    htsData = hts; midData = mid; pgaRules = pga;
+
+    // 供后续计算 HTSQty / HTSQty2 使用（key=HTS，value={Unit1,Unit2}）
+    window.__unitConfig = unitCfg || {};
+
     uploadBtn.disabled = false;
     uploadBtn.classList.remove('opacity-50');
     loadingMsg.innerText = '';
@@ -286,6 +557,7 @@ function __startConfigLoad() {
   });
 }
 
+
 // DOMContentLoaded 触发加载；若已就绪则立即加载
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', __startConfigLoad);
@@ -293,8 +565,8 @@ if (document.readyState === 'loading') {
   __startConfigLoad();
 }
 // 选择文件
-  uploadBtn.addEventListener('click', () => { try { fileInput.value = ''; } catch (_) {} fileInput.click(); });
-  fileInput.addEventListener('change', () => {
+  if (uploadBtn)  uploadBtn.addEventListener('click', () => { try { fileInput.value = ''; } catch (_) {} fileInput.click(); });
+  if (fileInput)  fileInput.addEventListener('change', () => {
     if (!fileInput.files.length) { alert('Please select a file'); return; }
     currentFile = fileInput.files[0];
     const base = currentFile.name.replace(/\.(xlsx|xls|csv)$/i, '');
@@ -327,13 +599,90 @@ if (document.readyState === 'loading') {
   portSel && portSel.addEventListener('change', () => selectedPortKey = portSel.value.trim());
   dateSel && dateSel.addEventListener('change', () => selectedDateKey = dateSel.value.trim());
 
-  // Continue：进入表单页并渲染
-  continueBtn && continueBtn.addEventListener('click', () => {
+// Continue：点击后先做合单检测与规则切换，完成后再进入表单页
+if (continueBtn) {
+  continueBtn.addEventListener('click', async (e) => {
     if (!currentFile) { alert('Please select a file'); return; }
-    document.getElementById('upload-section').classList.add('hidden');
-    document.getElementById('form-section').classList.remove('hidden');
-    renderForm(currentDefaultMawb, { portKey: selectedPortKey, dateKey: selectedDateKey });
+
+    const btn = e.currentTarget;
+    lockButton(btn);  // 禁用 + 隐文字 + 旋转加载
+
+    try {
+      // 只在代码里指定的 sheet/header 上判断：hawb + consignor_item_id（可在上方常量覆盖）
+      const isCons = await detectConsolidatedShipmentFromFile(currentFile);
+      window.__isConsolidatedShipment = !!isCons;
+
+      // 命中则切到合单规则，否则走常规 rule
+      ruleConfig = (isCons && Array.isArray(ruleConsolidatedConfig) && ruleConsolidatedConfig.length)
+        ? ruleConsolidatedConfig
+        : baseRuleConfig;
+
+      // 检测完成后再切换页面并渲染（顶部会出现 Consolidated 横幅）
+      document.getElementById('upload-section')?.classList.add('hidden');
+      document.getElementById('form-section')?.classList.remove('hidden');
+      renderForm(currentDefaultMawb, { portKey: selectedPortKey, dateKey: selectedDateKey });
+    } catch (err) {
+      console.warn('Continue flow failed:', err);
+      alert('Failed to prepare the form. Please check the file and try again.');
+    } finally {
+      unlockButton(btn); // 切页后通常被隐藏，解锁无妨
+    }
   });
+}
+
+
+// 只在“代码里指定的 sheet + 表头键”上判断是否 Consolidated
+async function detectConsolidatedShipmentFromFile(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', password: EXCEL_PASSWORD });
+
+    const { sheetKey, headerList } = resolveConsolidateDetectSettings();
+    const headerKeySet = new Set(headerList.map(canon));
+
+    // 只检查目标 sheet；找不到就谨慎返回 false
+    const sheetName = wb.SheetNames.find(n => String(n).trim().toLowerCase() === sheetKey);
+    if (!sheetName) {
+      console.info('[Consolidated] target sheet not found:', sheetKey);
+      return false;
+    }
+
+    const ws  = wb.Sheets[sheetName];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) || [];
+
+    // 找“表头行 & 目标列”（任一 header 别名命中即可）
+    let headerRowIdx = -1, colIdx = -1;
+    for (let r = 0; r < aoa.length; r++) {
+      const row = aoa[r] || [];
+      const idx = row.findIndex(cell => headerKeySet.has(canon(cell)));
+      if (idx !== -1) { headerRowIdx = r; colIdx = idx; break; }
+    }
+    if (headerRowIdx === -1 || colIdx === -1) {
+      console.info('[Consolidated] header not found on sheet:', sheetKey, 'headers tried:', headerList);
+      return false;
+    }
+
+    // 统计唯一值（忽略空白；整格内容为一个值）
+    const uniques = new Set();
+    for (let r = headerRowIdx + 1; r < aoa.length; r++) {
+      const v = aoa[r]?.[colIdx];
+      const s = String(v ?? '').trim();
+      if (!s) continue;
+      uniques.add(s);
+      if (uniques.size > 1) {
+        console.info('[Consolidated] unique>=2 on sheet=%s col=%d → TRUE', sheetName, colIdx);
+        return true;
+      }
+    }
+    const ok = uniques.size > 1;
+    console.info('[Consolidated] uniqueCount=%d on sheet=%s col=%d → %s',
+                 uniques.size, sheetName, colIdx, ok);
+    return ok;
+  } catch (err) {
+    console.warn('Consolidated detection failed:', err);
+    return false; // 失败不误判
+  }
+}
 
   // 生成下载
   generateBtn.addEventListener('click', () => {
@@ -345,6 +694,45 @@ if (document.readyState === 'loading') {
 // 渲染动态表单，并根据 Port/Date 做覆盖
 function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   const formEl = document.getElementById('dynamic-form');
+
+// ==== 新增：若判定为合单，在表单页顶部给出醒目的提醒 ====
+(function maybeShowConsolidatedBanner() {
+  const formEl = document.getElementById('dynamic-form');
+  // 移除旧横幅（避免重复）
+  const old = document.getElementById('consolidated-banner');
+  if (old) old.remove();
+
+  if (!window.__isConsolidatedShipment) return;
+
+  const banner = document.createElement('div');
+  banner.id = 'consolidated-banner';
+  banner.className = 'col-span-2';
+  banner.style.border = '1px solid #fbbf24';      // amber-400
+  banner.style.background = '#fffbeb';            // amber-50
+  banner.style.color = '#92400e';                 // amber-800
+  banner.style.borderRadius = '12px';
+  banner.style.padding = '12px 16px';
+  banner.style.marginBottom = '10px';
+  banner.style.boxShadow = '0 4px 16px rgba(146,64,14,0.08)';
+  banner.style.fontWeight = '700';
+  banner.style.display = 'flex';
+  banner.style.alignItems = 'center';
+  banner.style.gap = '10px';
+
+  const icon = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  icon.setAttribute('viewBox','0 0 24 24');
+  icon.setAttribute('width','22');
+  icon.setAttribute('height','22');
+  icon.innerHTML = '<path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2V9h2v5z"/>';
+  banner.appendChild(icon);
+
+  const text = document.createElement('div');
+  text.textContent = 'Consolidated Shipment';
+  banner.appendChild(text);
+
+  formEl.parentNode?.insertBefore(banner, formEl); // 插在表单网格上方，更显眼
+})();
+
   // ===== 顶部：Replace MID with Manufacturer Name and Address 开关 + 输入框 =====
   // 容器
   const midBox = document.createElement('div');
@@ -560,7 +948,7 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
 
 }
 
-// ====== 下面开始是你原先的生成逻辑（略做调整：导出文件名根据客户变化） ======
+// ====== 生成逻辑（略做调整：导出文件名根据客户变化） ======
 async function generateAndDownload() {
   const formValues = {};
   document.querySelectorAll('#dynamic-form input, #dynamic-form select')
@@ -938,6 +1326,9 @@ if (mainCount > 0) {
     })();
     if (window.__skipRow) { window.__skipRow = false; continue; }
 
+    // 基于主列 HTS + GrossWeight/Manifest Qty Piece count，计算两个数量（没列名时不会写出）
+    attachHtsQty(out);
+    
     output.push(out);
 
     if ((i + 1) % 20 === 0 || i === main.length - 1) {
@@ -949,24 +1340,12 @@ if (mainCount > 0) {
 
 
   // === SHEIN: 生成 GroupIdentifier（每组≤998，尽量均分，组号从1开始） ===
-  if (IS_SHEIN) {
-    const MAX_PER_GROUP = 998;
-    const total = output.length;
-    if (total > 0) {
-      const groups = Math.ceil(total / MAX_PER_GROUP);
-      const base = Math.floor(total / groups);
-      const extra = total % groups; // 前 extra 组分配 base+1，其余 base
-      const sizes = Array.from({ length: groups }, (_, i) => base + (i < extra ? 1 : 0));
-      let idx = 0;
-      let gid = 1;
-      for (const sz of sizes) {
-        for (let k = 0; k < sz && idx < total; k++, idx++) {
-          if (typeof output[idx] === 'object' && output[idx] !== null) {
-            output[idx]['GroupIdentifier'] = gid;
-          }
-        }
-        gid++;
-      }
+  // === 分组：SHEIN 或 TEMU-合单都应用 ===
+  {
+    const needGrouping = IS_SHEIN || window.__isConsolidatedShipment;
+    if (needGrouping) {
+      // TEMU-合单 → House 约束；SHEIN（非合单）→ 均匀分组
+      applySheinGrouping(output, { respectHouseAwb: !!window.__isConsolidatedShipment });
     }
   }
 
@@ -996,8 +1375,10 @@ if (mainCount > 0) {
     else header.push('Original_ProductCode');
   }
 
-  // 保留原有 SHEIN 的 GroupIdentifier 逻辑
-  if (IS_SHEIN && !header.includes('GroupIdentifier')) header.push('GroupIdentifier');
+  // SHEIN 或 TEMU-合单都需要导出 GroupIdentifier
+  if ((IS_SHEIN || window.__isConsolidatedShipment) && !header.includes('GroupIdentifier')) {
+    header.push('GroupIdentifier');
+}
 
   const aoa = [header].concat(output.map(o => header.map(c => (o[c] ?? ''))));
   const ws2 = XLSX.utils.aoa_to_sheet(aoa);
@@ -1280,6 +1661,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const accent = IS_SHEIN ? 'emerald' : 'blue';
   beautifyAllTextInputs(document);
   const df = document.getElementById('dynamic-form');
-  if (df) observeNewInputs(df, 'neutral');
+  if (df && typeof observeNewInputs === 'function') observeNewInputs(df, 'neutral');
 });
 
