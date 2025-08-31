@@ -1379,12 +1379,15 @@ if (mainCount > 0) {
     attachHtsQty(out);
     
     // —— 新增：单位转换兜底 ——
-    // 若 QTY 为空（比如该 HTS 在 unit.json 没匹配到单位），则用 PCS 填充
-    (function fillQtyWithPcsIfEmpty(){
+    // 若 HTSQty 为空（比如该 HTS 在 unit.json 没匹配到单位），则用 PCS 填充
+    (function fillHtsQtyWithPcsIfEmpty(){
       const isBlank = v => v == null || String(v).trim() === '';
-      if (isBlank(out.QTY)) {
-        const pcs = out['Manifest Qty Piece count'];
-        if (!isBlank(pcs)) out.QTY = pcs;
+      if (isBlank(out.HTSQty)) {
+        const raw = out['Manifest Qty Piece count'];
+        const pcsNum = Number(String(raw ?? '').replace(/,/g, '')); // 转成数字
+        if (!Number.isNaN(pcsNum)) {
+          out.HTSQty = pcsNum.toFixed(3); // 保持三位小数格式，和 attachHtsQty 计算一致
+        }
       }
     })();
 
