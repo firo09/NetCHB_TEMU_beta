@@ -1377,6 +1377,16 @@ if (mainCount > 0) {
 
     // 基于主列 HTS + GrossWeight/Manifest Qty Piece count，计算两个数量（没列名时不会写出）
     attachHtsQty(out);
+    
+    // —— 新增：单位转换兜底 ——
+    // 若 QTY 为空（比如该 HTS 在 unit.json 没匹配到单位），则用 PCS 填充
+    (function fillQtyWithPcsIfEmpty(){
+      const isBlank = v => v == null || String(v).trim() === '';
+      if (isBlank(out.QTY)) {
+        const pcs = out['Manifest Qty Piece count'];
+        if (!isBlank(pcs)) out.QTY = pcs;
+      }
+    })();
 
     // 若勾选“Auto-adjust PGA QTY...”：FDAPRODUCTCODE 有值且 HTSQty < 1 的行，把 HTSQty 调为 1
     if (window.__roundUpPgaQtyEnabled) {
