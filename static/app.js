@@ -43,7 +43,7 @@ const KG_FACTORS = {
 };
 // 计数：以 pcs 为基
 const PCS_FACTORS = {
-  "pcs": 1, "no.": 1, "prs.": 1, "doz.": 12, "doz. prs.": 12
+  "pcs": 1, "no.": 1, "prs.": 1, "doz.": 12, "doz. prs.": 12, "gross": 144
 };
 // 统一单位字符串
 function normUnit(u){ return String(u||'').trim().toLowerCase(); }
