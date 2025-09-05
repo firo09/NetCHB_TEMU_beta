@@ -762,14 +762,84 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   tip.className = 'text-sm text-slate-600 mb-1';
   tip.innerHTML = 'Please enter the content in <span style="color:red;">parentheses</span>';
 
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.id = 'midreplace-rows';
-  input.className = 'ui-input w-full italic text-gray-500';
-  input.placeholder = 'Rows: 361, 4330, 4676, 5475, 6870, 9340, 9354, 9377';
+// —— 多输入框容器 + 行组件 + 收集逻辑（新增）——
+const inputsContainer = document.createElement('div');
+inputsContainer.id = 'midreplace-rows-list';
+
+// 收集所有输入框中的数字 → 去重 → 写入全局 Set
+function collectRowsAndUpdateSet() {
+  const texts = Array.from(inputsContainer.querySelectorAll('input.mid-rows'))
+    .map(el => el.value || '');
+  const nums = new Set();
+  texts.forEach(t => {
+    (t.match(/\d+/g) || []).forEach(n => {
+      const v = parseInt(n, 10);
+      if (Number.isFinite(v) && v > 0) nums.add(v);
+    });
+  });
+  window.__midReplaceRowsSet = nums;
+}
+
+// 创建一行输入（index>0 的行会带有“−”按钮）
+function makeRow(initialValue = '', withMinus = false) {
+  const row = document.createElement('div');
+  // 输入行：外部按钮（不再放到输入框内部）
+  row.className = 'flex items-center gap-2 mb-2';
+
+  row.innerHTML = `
+    <input
+      type="text"
+      class="ui-input italic text-gray-500 mid-rows flex-1"
+      placeholder="Rows: 361, 4330, 4676, 5475, 6870, 9340, 9354, 9377"
+      value="${initialValue.replace(/"/g, '&quot;')}"
+    />
+    <div class="shrink-0 flex items-center gap-1">
+      <button type="button" class="btn-mid-add mid-mini-btn" aria-label="Add">+</button>
+      ${withMinus ? `<button type="button" class="btn-mid-del mid-mini-btn" aria-label="Remove">−</button>` : ''}
+    </div>
+  `;
+
+
+  const inputEl = row.querySelector('input.mid-rows');
+  const addBtn  = row.querySelector('.btn-mid-add');
+  const delBtn  = row.querySelector('.btn-mid-del');
+
+  // 输入时：去掉斜体/灰色（有内容），并重新汇总行号
+  const syncStyleAndCollect = () => {
+    if ((inputEl.value || '').trim()) {
+      inputEl.classList.remove('italic','text-gray-500');
+    } else {
+      inputEl.classList.add('italic','text-gray-500');
+    }
+    collectRowsAndUpdateSet();
+  };
+  inputEl.addEventListener('input', syncStyleAndCollect);
+  inputEl.addEventListener('change', syncStyleAndCollect);
+
+  // “+”：在当前行下方插入一个“带减号”的新输入
+  addBtn.addEventListener('click', () => {
+    const newRow = makeRow('', true);
+    row.insertAdjacentElement('afterend', newRow);
+    newRow.querySelector('input.mid-rows')?.focus();
+    collectRowsAndUpdateSet();
+  });
+
+  // “−”：删除本行
+  if (delBtn) {
+    delBtn.addEventListener('click', () => {
+      row.remove();
+      collectRowsAndUpdateSet();
+    });
+  }
+
+  return row;
+}
+
+// 初始：一行（只有“+”按钮）
+inputsContainer.appendChild(makeRow('', false));
 
   inputWrap.appendChild(tip);
-  inputWrap.appendChild(input);
+  inputWrap.appendChild(inputsContainer);
   midBox.appendChild(inputWrap);
 
   // 事件：开关控制显示/隐藏（用 querySelector 取到新复选框）
@@ -780,29 +850,7 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   switchInput.addEventListener('change', () => {
     window.__midReplaceEnabled = switchInput.checked;
     inputWrap.classList.toggle('hidden', !switchInput.checked);
-    window.__midReplaceRowsSet = __parseRowsInputToSet(
-      document.getElementById('midreplace-rows')?.value || ''
-    );
-  });
-
-  // 事件：开关控制显示/隐藏
-  switchInput.addEventListener('change', () => {
-    window.__midReplaceEnabled = switchInput.checked;
-    inputWrap.classList.toggle('hidden', !switchInput.checked);
-    // 每次切换时重算行集合
-    window.__midReplaceRowsSet = __parseRowsInputToSet(document.getElementById('midreplace-rows')?.value || '');
-  });
-
-  // 事件：输入变化 → 解析行号集合
-  input.addEventListener('input', () => {
-    window.__midReplaceRowsSet = __parseRowsInputToSet(input.value || '');
-    // placeholder 自然由浏览器处理：非空时不显示
-    // 为了视觉统一，用户一旦输入，把斜体/灰色去掉，仅显示用户输入
-    if ((input.value || '').trim().length > 0) {
-      input.classList.remove('italic','text-gray-500');
-    } else {
-      input.classList.add('italic','text-gray-500');
-    }
+    collectRowsAndUpdateSet();
   });
 
   formEl.innerHTML = '';
@@ -1744,6 +1792,28 @@ document.addEventListener('DOMContentLoaded', () => {
   sections.forEach(sec => { if (sec) { try { beautifyAllTextInputs(sec); } catch(e){} } });
 });
 
+// --- mini 按钮样式（针对 + / −） ---
+const styleEl = document.createElement('style');
+styleEl.textContent = `
+  .mid-mini-btn {
+    height: 30px;
+    min-width: 30px;
+    padding: 0 8px;
+    border: 1px solid #d1d5db;   /* gray-300 */
+    border-radius: 8px;
+    background: #fff;
+    line-height: 1;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .mid-mini-btn:hover {
+    background: #f3f4f6;         /* gray-100 */
+  }
+  .mid-mini-btn:active {
+    background: #e5e7eb;         /* gray-200 */
+  }
+`;
+document.head.appendChild(styleEl);
 
 // Apply input skin globally on load
 document.addEventListener('DOMContentLoaded', () => {
