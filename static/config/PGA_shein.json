@@ -1,5 +1,15 @@
 [
   {
+    "FDAPRODUCTCODE": "53-HY-9",
+    "Description_contain": "",
+    "Error_fix": "53HY-99",
+    "Delete_code": "N",
+    "FDAPROGRAMCODE": "COS",
+    "FDAPROCESSINGCODE": "",
+    "FDAINTENDEDUSECODE": "100.000",
+    "FDAARRIVALTIME": "08:00"
+  },
+  {
     "FDAPRODUCTCODE": "53YJ -",
     "Description_contain": "",
     "Error_fix": "53YJ-09",
