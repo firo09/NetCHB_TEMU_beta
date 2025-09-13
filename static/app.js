@@ -291,8 +291,6 @@ let htsData = [], midData = [], pgaRules = [];
 // ==== FDA 修复：全局状态 ====
 window.__fdaPresetMap      = [];          // 配置文件里的预设映射（不同客户不同文件）
 window.__fdaScan           = null;        // 预扫描结果：{ pairs:[{row,desc,code}], descList:[...], codeList:[...], groupMap:Map }
-window.__fuzzyDedup        = false;       // “模糊去重”开关
-window.__descFixMapExact   = new Map();   // Desc(精确) -> 新 FDAPRODUCTCODE（允许为空字符串）
 window.__descFixMapByNorm  = new Map();   // Desc(归一化) -> 新 FDAPRODUCTCODE
 window.__codeFixMap        = new Map();   // 旧 FDAPRODUCTCODE -> 新 FDAPRODUCTCODE
 window.__manualFdaRows     = new Set();   // 被手动/批量改过的行索引（0-based）
@@ -902,9 +900,9 @@ async function preScanFdaFromFile(file) {
   // 生成下载
   generateBtn.addEventListener('click', () => {
     if (!currentFile) { alert('No file selected'); return; }
+    flushFdaEdits();              // ⬅️ 新增：强制把 UI 的值写入 Map
     generateAndDownload();
   });
-
 
 // 渲染动态表单，并根据 Port/Date 做覆盖
 function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
@@ -1154,30 +1152,25 @@ inputsContainer.appendChild(makeRow('', false));
           <span class="text-slate-700 font-semibold">Fix FDA Product Code based on description</span>
         </label>
         <div id="fda-fix-body" class="mt-3 hidden">
-          <label class="inline-flex items-center gap-2 cursor-pointer mb-2">
-            <input id="chk-fda-fuzzy" type="checkbox" class="h-4 w-4 accent-blue-600">
-            <span>Enable fuzzy de-duplication (ignore spaces & special characters)</span>
-          </label>
           <div id="fda-rows" class="space-y-2"></div>
         </div>
       `;
       formEl.appendChild(box1);
 
-      const chkFix   = box1.querySelector('#chk-fda-fix');
-      const body1    = box1.querySelector('#fda-fix-body');
-      const chkFuzzy = box1.querySelector('#chk-fda-fuzzy');
-      const rowsDiv  = box1.querySelector('#fda-rows');
+      const chkFix  = box1.querySelector('#chk-fda-fix');
+      const body1   = box1.querySelector('#fda-fix-body');
+      const rowsDiv = box1.querySelector('#fda-rows');
 
       chkFix.checked = false;
-      chkFuzzy.checked = !!window.__fuzzyDedup;
       chkFix.addEventListener('change', () => {
         body1.classList.toggle('hidden', !chkFix.checked);
-        window.__descFixMapExact.clear();
+        // 仅清一张表：归一化后的模糊映射
         window.__descFixMapByNorm.clear();
+        window.__descFixKwTokens = new Map();   // ⬅️ 新增，连同 tokens 一起清空
         rowsDiv.innerHTML = '';
 
         if (chkFix.checked) {
-          // 先放预设 => 预设显示在第一行
+          // 预设：统一按“模糊命中”带入
           applyPresetRows();
 
           // 如果没有任何命中预设，再补一行空行
@@ -1189,82 +1182,60 @@ inputsContainer.appendChild(makeRow('', false));
         }
       });
 
-      chkFuzzy.addEventListener('change', () => {
-        const goingFuzzy = !!chkFuzzy.checked;
-        window.__fuzzyDedup = goingFuzzy;
-
-        // 读取现有行（仅在“切到模糊”时保留；切回精确时不保留）
-        const saved = [];
-        if (goingFuzzy) {
-          rowsDiv.querySelectorAll('.__fda-desc-row').forEach(row => {
-            const sel = row.querySelector('select');
-            const inp = row.querySelector('input.fda-code-input');
-            const code = (inp ? inp.value : '').trim();
-            const val  = sel.value || '';
-            const text = sel.options[sel.selectedIndex]?.text || val;
-            saved.push({ val, text, code });
-          });
-        }
-
-        // 清空
-        rowsDiv.innerHTML = '';
-        window.__descFixMapExact.clear();
-        window.__descFixMapByNorm.clear();
-
-        const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
-
-        if (goingFuzzy) {
-          // 精确 → 模糊：把已选的“原文值(val)”归一化成 key，空值跳过
-          const mapped = saved
-            .map(({ val, code }) => {
-              if (!val) return { keyOrDesc:'', newCode: code };
-              return { keyOrDesc: norm(val), newCode: code };
-            })
-            .filter(x => x.keyOrDesc);
-
-          // 重建这些行
-          mapped.forEach(item => addRowByDesc(item.keyOrDesc, item.newCode));
-
-          // 再根据模糊规则带入预设
-          applyPresetRows();
-        } else {
-          // 模糊 → 精确：不保留任何既有选择；严格模式只按“精确命中”的预设来
-          applyPresetRows();
-        }
-
-        // 如果仍然没有任何行，再补一行空行
-        if (rowsDiv.children.length === 0) addRowByDesc();
-
-        // 统一样式与下拉过滤
-        beautifyAllSelects(body1);
-        body1.querySelectorAll('select').forEach(attachFilterableSelect);
-      });
+      // ⚠️ 不再存在 chkFuzzy，也不再有任何“模式切换”的监听与逻辑
 
       function collectRowsByDesc(){
         const saved = [];
         rowsDiv.querySelectorAll('.__fda-desc-row').forEach(row => {
           const sel = row.querySelector('select');
-          const inp = row.querySelector('input.fda-code-input'); // ← 只取右侧 10 位文本框
+          const inp = row.querySelector('input.fda-code-input');
           const val = sel.value;
           const code = (inp ? inp.value : '').trim();
-          if (window.__fuzzyDedup) {
-            if (val) saved.push({ keyOrDesc: val, newCode: code });
-          } else {
-            if (val) saved.push({ keyOrDesc: val, newCode: code });
-          }
+          if (val) saved.push({ keyOrDesc: val, newCode: code });
         });
         return saved;
       }
 
+
       function addRowByDesc(presetKeyOrDesc='', presetCode=''){
         const selectedSet = new Set();
         rowsDiv.querySelectorAll('.__fda-desc-row select').forEach(s => selectedSet.add(s.value));
-        const opts = currentDescOptions(window.__fuzzyDedup, selectedSet);
+        const opts = currentDescOptions(false, selectedSet); // ← 新：强制 false
 
         const row = document.createElement('div');
         row.className = '__fda-desc-row flex items-center gap-2';
         const sel = buildSelect(opts, '-- Select --');
-        if (presetKeyOrDesc) sel.value = presetKeyOrDesc;
+        if (presetKeyOrDesc) {
+          const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+
+          // 1) 传入的是“原始描述”：直接选中
+          if (Array.from(sel.options).some(o => o.value === presetKeyOrDesc)) {
+            sel.value = presetKeyOrDesc;
+
+          // 2) 传入的是“分组 key（归一化值）”：在该组里挑“未被占用且出现在此次下拉 opts 里的”第一个原始描述
+          } else if (scan.groupMap && scan.groupMap.has(presetKeyOrDesc)) {
+            const candidates = Array.from(scan.groupMap.get(presetKeyOrDesc)); // 该组原始描述列表
+            // 本次下拉的可选项就是 opts；已被使用的原始描述已在 opts 中被排除了
+            const firstInOpts = candidates.find(d => opts.includes(d)) || null;
+
+            if (firstInOpts) {
+              sel.value = firstInOpts;
+            } else if (candidates.length) {
+              // 理论上不该走到这里（因为已用的都被排除了），但加个兜底以免意外
+              const o = document.createElement('option');
+              o.value = candidates[0];
+              o.textContent = candidates[0];
+              sel.appendChild(o);
+              sel.value = candidates[0];
+            }
+
+          // 3) 兜底：找一个“归一化后相等”的原始描述
+          } else {
+            const hit = Array.from(sel.options).find(o => norm(o.value) === presetKeyOrDesc);
+            if (hit) sel.value = hit.value;
+          }
+        }
+
         sel.style.minWidth = '240px';
 
         const span = document.createElement('span');
@@ -1294,65 +1265,72 @@ inputsContainer.appendChild(makeRow('', false));
 
         function writeBack(){
           const code = (inp.value || '').trim();
-          if (window.__fuzzyDedup) {
-            const k = sel.value;
-            if (!k) return;
-            if (code === '') window.__descFixMapByNorm.set(k, '');
-            else window.__descFixMapByNorm.set(k, code);
-          } else {
-            const d = sel.value;
-            if (!d) return;
-            if (code === '') window.__descFixMapExact.set(d, '');
-            else window.__descFixMapExact.set(d, code);
-          }
+          const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+          const raw  = sel.value;
+          const k    = norm(raw);
+          if (!k) return;
+
+          // ① 保存“下拉显示文本”的关键词 tokens，供导出时逐 token 命中
+          if (!window.__descFixKwTokens) window.__descFixKwTokens = new Map();
+          const labelText = sel.options[sel.selectedIndex]?.text || '';
+          const tokens = labelText
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .split(/\s+/).filter(Boolean);   // 例：['butter','knife','stainless','steel']
+          window.__descFixKwTokens.set(k, tokens);
+
+          // ② 保存 key -> code
+          window.__descFixMapByNorm.set(k, code === '' ? '' : code);
         }
 
         sel.addEventListener('change', writeBack);
         inp.addEventListener('input',  writeBack);
+
+        // ⬇️ 新增：把写回函数挂到行上，并在创建/预设赋值后立即写回一次
+        row.__writeBack = writeBack;
+        writeBack();
 
         plus.addEventListener('click', () => addRowByDesc());
         minus.addEventListener('click', () => { row.remove(); writeBack(); });
       }
 
       // 预设：与配置文件匹配则自动加行并填充值（模糊逻辑与选中开关一致）
+      // 预设：与配置文件匹配则自动加行并填充值（始终使用“模糊包含”逻辑）
       function applyPresetRows(){
         if (!Array.isArray(window.__fdaPresetMap)) return;
+
         const getCode = it => (it.FDAPRODUCTCODE ?? it.FDAPROGRAMCODE ?? '').toString();
+        const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
 
-        const picked = new Set();
-        rowsDiv.querySelectorAll('.__fda-desc-row select').forEach(s => picked.add(s.value));
+        // 已选分组 key（用归一化值），避免给同一组重复加行
+        const pickedKeys = new Set();
+        rowsDiv.querySelectorAll('.__fda-desc-row select')
+          .forEach(s => pickedKeys.add(norm(s.value)));
 
-        if (window.__fuzzyDedup) {
-          const bestForKey = new Map(); // gk -> { len, code }
-          for (const it of window.__fdaPresetMap) {
-            const d = (it.DescOfMerchandise || '').toString();
-            const c = getCode(it);
-            if (!d && !c) continue;
-            const k = norm(d);
-            for (const gk of scan.groupMap.keys()) {
-              if (gk.includes(k) || k.includes(gk)) {
-                const cur = bestForKey.get(gk);
-                if (!cur || k.length > cur.len) bestForKey.set(gk, { len: k.length, code: c });
-              }
+        // 针对每个 groupKey，挑一个“命中最具体（归一化后长度最长）”的预设
+        const bestForKey = new Map(); // gk -> { len, code }
+        for (const it of window.__fdaPresetMap) {
+          const d = (it.DescOfMerchandise || '').toString();
+          const c = getCode(it);
+          if (!d && !c) continue;
+
+          const k = norm(d); // 配置里的描述 -> 归一化
+          for (const gk of scan.groupMap.keys()) {
+            // 双向包含：描述包含规则 or 规则包含描述
+            if (gk.includes(k) || k.includes(gk)) {
+              const cur = bestForKey.get(gk);
+              if (!cur || k.length > cur.len) bestForKey.set(gk, { len: k.length, code: c });
             }
           }
-          for (const [gk, { code }] of bestForKey.entries()) {
-            if (picked.has(gk)) continue;
-            addRowByDesc(gk, code);
-            picked.add(gk);
-          }
-        } else {
-          window.__fdaPresetMap.forEach(it=>{
-            const d=(it.DescOfMerchandise||'').toString();
-            const c = getCode(it);
-            if (!d && !c) return;
-            if (!picked.has(d) && scan.descList.includes(d)) {
-              addRowByDesc(d, c);
-              picked.add(d);
-            }
-          });
+        }
+
+        // 根据 bestForKey 加行；addRowByDesc 会把 gk 转成“该组里未被占用的原始描述”
+        for (const [gk, { code }] of bestForKey.entries()) {
+          if (pickedKeys.has(gk)) continue;
+          addRowByDesc(gk, code);
         }
       }
+
 
       // ---------- 块二：Fix Specific FDA Product Code（按 Code 替换） ----------
       const box2 = document.createElement('div');
@@ -1418,24 +1396,23 @@ inputsContainer.appendChild(makeRow('', false));
         attachFilterableSelect(sel);
 
         function writeBack(){
-          const oldC = sel.value;
+          const oldC = sel.value || '';
           const newC = (inp.value || '').trim();
           if (!oldC) return;
-          window.__codeFixMap.set(oldC, newC);
+          (window.__codeFixMap ||= new Map()).set(oldC, newC);
         }
         sel.addEventListener('change', writeBack);
         inp.addEventListener('input',  writeBack);
+
+        // ⬇️ 新增
+        row.__writeBack = writeBack;
+        writeBack();
 
         plus.addEventListener('click', () => addRowByCode());
         minus.addEventListener('click', () => { row.remove(); writeBack(); });
       }
 
-      // 初始化：若打开“Fix FDA Product Code”，自动填充预设
-      // （按你的习惯，此处不自动勾选；用户勾选后再填充）
-      chkFix.addEventListener('change', () => {
-        if (chkFix.checked) { applyPresetRows(); }
-      });
-
+      
     } catch(e) {
       console.warn('insertFdaFixBlocks failed', e);
     }
@@ -1589,6 +1566,34 @@ inputsContainer.appendChild(makeRow('', false));
   });
   // ===== 结束：动态标红 =====
 
+}
+
+function flushFdaEdits(){
+  document.querySelectorAll('.__fda-desc-row, .__fda-code-row').forEach(row => {
+    if (typeof row.__writeBack === 'function') {
+      row.__writeBack();
+      return;
+    }
+    // 兜底：理论上走不到
+    const sel = row.querySelector('select');
+    const inp = row.querySelector('input.fda-code-input');
+    if (!sel || !inp) return;
+    const code = (inp.value || '').trim();
+    if (row.classList.contains('__fda-desc-row')) {
+      const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+      const k    = norm(sel.value);
+      if (!k) return;
+      if (!window.__descFixKwTokens) window.__descFixKwTokens = new Map();
+      const labelText = sel.options[sel.selectedIndex]?.text || '';
+      const tokens    = labelText.toLowerCase().replace(/[^a-z0-9]+/g,' ').split(/\s+/).filter(Boolean);
+      window.__descFixKwTokens.set(k, tokens);
+      window.__descFixMapByNorm.set(k, code === '' ? '' : code);
+    } else if (row.classList.contains('__fda-code-row')) {
+      const from = sel.value || '';
+      if (!from) return;
+      (window.__codeFixMap ||= new Map()).set(from, code);
+    }
+  });
 }
 
 // ====== 生成逻辑（略做调整：导出文件名根据客户变化） ======
@@ -1827,40 +1832,56 @@ if (mainCount > 0) {
 
     // ==== 先应用用户自定义修复（Desc 批量 / 指定 Code 替换）====
     (() => {
-      const orig = (out.FDAPRODUCTCODE || '').toString();
-      if (!orig) return;
+      // 用你当前循环的下标变量名替换 rowIdx（通常就是 i）
+      const rowIdx = i;
 
+      const desc = String(out['DescOfMerchandise'] ?? '');
       let newCode = null;
 
-      // A) Fix by Desc（支持精确或模糊）
+      // A) 基于描述的批量修复（模糊/精确；即使原码为空也允许改）
       if (document.getElementById('chk-fda-fix')?.checked) {
-        const desc = (out.DescOfMerchandise || '').toString();
-        if (window.__fuzzyDedup && window.__descFixMapByNorm?.size) {
-          const k = (desc || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+        if (window.__descFixMapByNorm?.size) {
+          const k = desc.toLowerCase().replace(/[^a-z0-9]/g,'');
+
+          // “长规则优先”：按 token 总长度降序
           const entries = Array.from(window.__descFixMapByNorm.entries())
             .filter(([kw]) => !!kw)
-            .sort((a, b) => b[0].length - a[0].length);  // 长的优先
+            .sort((a, b) => {
+              const ta = ((window.__descFixKwTokens?.get(a[0])) || [a[0]])
+                           .map(t => t.replace(/[^a-z0-9]/g,'')).join('').length;
+              const tb = ((window.__descFixKwTokens?.get(b[0])) || [b[0]])
+                           .map(t => t.replace(/[^a-z0-9]/g,'')).join('').length;
+              return tb - ta;
+            });
+
           for (const [kw, code] of entries) {
-            if (k.includes(kw)) { newCode = code; break; }
+            // 逐 token 命中（忽略大小写与空格/符号）
+            const toks = (window.__descFixKwTokens && window.__descFixKwTokens.get(kw)) || [kw];
+            const ok = toks
+              .map(t => t.toLowerCase().replace(/[^a-z0-9]/g,''))
+              .filter(Boolean)
+              .every(t => k.includes(t));
+            if (ok) { newCode = code; break; }
           }
         } else if (window.__descFixMapExact?.size) {
           if (window.__descFixMapExact.has(desc)) newCode = window.__descFixMapExact.get(desc);
         }
       }
 
-      // B) Fix specific code（code->code）
+      // B) 特定 Code→Code（只有有原码时才替换）
       if (newCode == null && document.getElementById('chk-fda-fix-specific')?.checked && window.__codeFixMap?.size) {
-        if (window.__codeFixMap.has(orig)) newCode = window.__codeFixMap.get(orig);
+        const origNow = String(out['FDAPRODUCTCODE'] ?? '');
+        if (origNow && window.__codeFixMap.has(origNow)) newCode = window.__codeFixMap.get(origNow);
       }
 
+      // 写回输出，并标记这行为“人工/系统已改”，后续 Error_fix / Delete_code 跳过
       if (newCode != null) {
-        // 记录修改：Original_ProductCode
-        if (orig !== newCode) out.Original_ProductCode = orig;
-        out.FDAPRODUCTCODE = newCode;          // 允许置空
-        (window.__manualFdaRows ||= new Set()).add(i);   // 本行后续跳过 Error_fix/Delete_code
+        const origNow = String(out['FDAPRODUCTCODE'] ?? '');
+        if (origNow !== newCode) out['Original_ProductCode'] = origNow;
+        out['FDAPRODUCTCODE'] = newCode;          // 允许置空
+        (window.__manualFdaRows ||= new Set()).add(rowIdx);
       }
     })();
-
 
     // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Anything_else + Description_contain；Error_fix 记录原始值）
     (() => {
