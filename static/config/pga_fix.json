@@ -1,5 +1,13 @@
 [
   {
+    "DescOfMerchandise": "FOUNDATION",
+    "FDAPROGRAMCODE": "53GD-03"
+  },
+  {
+    "DescOfMerchandise": "MEATBALL SCOOP",
+    "FDAPROGRAMCODE": "52AIU40"
+  },
+  {
     "DescOfMerchandise": "CANDLE WAX",
     "FDAPROGRAMCODE": "52AIS38"
   },
@@ -28,7 +36,7 @@
     "FDAPROGRAMCODE": "52AYS99"
   },
   {
-    "DescOfMerchandise": "COVERING FILM",
+    "DescOfMerchandise": "COVERING FILM PE",
     "FDAPROGRAMCODE": "52AYS34"
   },
   {
@@ -36,7 +44,7 @@
     "FDAPROGRAMCODE": "53CC-03"
   },
   {
-    "DescOfMerchandise": "PACKAGING BAG",
+    "DescOfMerchandise": "PACKAGING BAG PP",
     "FDAPROGRAMCODE": "52BYY08"
   },
   {
@@ -44,7 +52,7 @@
     "FDAPROGRAMCODE": "52AIU40"
   },
   {
-    "DescOfMerchandise": "lunch box",
+    "DescOfMerchandise": "lunch box PP",
     "FDAPROGRAMCODE": "52AIS34"
   },
   {
@@ -64,15 +72,15 @@
     "FDAPROGRAMCODE": "53CD-02"
   },
   {
-    "DescOfMerchandise": "spoon",
+    "DescOfMerchandise": "spoon Stainless Steel",
     "FDAPROGRAMCODE": "52AIU38"
   },
   {
-    "DescOfMerchandise": "DAMP PROOF MAT",
+    "DescOfMerchandise": "DAMP PROOF MAT TPE",
     "FDAPROGRAMCODE": "52AIS34"
   },
   {
-    "DescOfMerchandise": "PROTECTIVE COVER",
+    "DescOfMerchandise": "PROTECTIVE COVER ZINC ALLOY",
     "FDAPROGRAMCODE": "52AIS99"
   },
   {
@@ -96,11 +104,11 @@
     "FDAPROGRAMCODE": "53HH-99"
   },
   {
-    "DescOfMerchandise": "PACKAGING BAG",
+    "DescOfMerchandise": "PACKAGING BAG PAPER",
     "FDAPROGRAMCODE": "52AIU38"
   },
   {
-    "DescOfMerchandise": "PACKAGING BOX",
+    "DescOfMerchandise": "PACKAGING BOX PAPER",
     "FDAPROGRAMCODE": "52AIQ31"
   },
   {
@@ -128,7 +136,7 @@
     "FDAPROGRAMCODE": ""
   },
   {
-    "DescOfMerchandise": "FIXING STAND    COPPER",
+    "DescOfMerchandise": "FIXING STAND COPPER",
     "FDAPROGRAMCODE": ""
   }
 ]
