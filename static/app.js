@@ -21,8 +21,8 @@ const IS_SHEIN = (document.body && document.body.getAttribute('data-client') ===
 
 // 根据客户选择不同的配置文件名（SHEIN 使用 *_shein.json）
 const CONFIG_FILES = IS_SHEIN
-  ? { rule: 'rule_shein.json', rule_consolidated: 'rule_consolidated_shein.json', hts: 'hts_shein.json', mid: 'mid_shein.json', pga: 'PGA_shein.json' }
-  : { rule: 'rule.json',       rule_consolidated: 'rule_consolidated.json',       hts: 'hts.json',        mid: 'mid.json',        pga: 'PGA.json'       };
+  ? { rule: 'rule_shein.json', rule_consolidated: 'rule_consolidated_shein.json', hts: 'hts_shein.json', mid: 'mid_shein.json', pga: 'PGA_shein.json', fda_map: 'pga_fix.json' }
+  : { rule: 'rule.json',       rule_consolidated: 'rule_consolidated.json',       hts: 'hts.json',        mid: 'mid.json',      pga: 'PGA.json',       fda_map: 'pga_fix.json' };
 
 // 全局保存当前文件、默认 MAWB、预选项
 let currentFile = null;
@@ -288,6 +288,15 @@ const generateBtn = document.getElementById('generate-btn');
 
 let htsData = [], midData = [], pgaRules = [];
 
+// ==== FDA 修复：全局状态 ====
+window.__fdaPresetMap      = [];          // 配置文件里的预设映射（不同客户不同文件）
+window.__fdaScan           = null;        // 预扫描结果：{ pairs:[{row,desc,code}], descList:[...], codeList:[...], groupMap:Map }
+window.__fuzzyDedup        = false;       // “模糊去重”开关
+window.__descFixMapExact   = new Map();   // Desc(精确) -> 新 FDAPRODUCTCODE（允许为空字符串）
+window.__descFixMapByNorm  = new Map();   // Desc(归一化) -> 新 FDAPRODUCTCODE
+window.__codeFixMap        = new Map();   // 旧 FDAPRODUCTCODE -> 新 FDAPRODUCTCODE
+window.__manualFdaRows     = new Set();   // 被手动/批量改过的行索引（0-based）
+
 // === MID 替换：全局状态 ===
 window.__midReplaceEnabled = false;
 window.__midReplaceRowsSet = new Set(); // 存储“包含表头”的行号（Number），如 361、4330 等
@@ -307,7 +316,7 @@ function __parseRowsInputToSet(inputText) {
   const css = `
 .ui-select{position:relative;width:100%}
 .ui-select__btn{width:100%;border:1px solid #d1d5db;border-radius:12px;padding:10px 40px 10px 14px;background:#fff;
-  box-shadow:0 1px 2px rgba(16,24,40,.05);line-height:1.2}
+  box-shadow:0 1px 2px rgba(16,24,40,0.05);line-height:1.2}
 .ui-select__caret{position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:.6}
 .ui-select__menu{position:absolute;z-index:50;left:0;top:calc(100% + 6px);width:100%;max-height:260px;overflow:auto;
   background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 8px 24px rgba(16,24,40,.12);display:none}
@@ -317,8 +326,12 @@ function __parseRowsInputToSet(inputText) {
 .ui-option[aria-selected="true"]{background:#eef2ff}
 /* 文本输入框统一外观，和下拉按钮一致 */
 .ui-input{width:100%;border:1px solid #d1d5db;border-radius:12px;padding:10px 14px;background:#fff;
-  box-shadow:0 1px 2px rgba(16,24,40,.05);line-height:1.2;transition:box-shadow .15s,border-color .15s;outline:0}
-.ui-input:focus{box-shadow:0 0 0 3px rgba(148,163,184,.25)};`
+  box-shadow:0 1px 2px rgba(16,24,40,0.05);line-height:1.2;transition:box-shadow .15s,border-color .15s;outline:0}
+.ui-input:focus{box-shadow:0 0 0 3px rgba(148,163,184,0.25)}
+/* --- filter bar for custom select --- */
+.ui-select .ui-filter{position:sticky;top:0;z-index:1;padding:6px 8px;background:#fff;border-bottom:1px solid #e5e7eb}
+.ui-select .ui-filter input{width:100%;padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px;outline:0}
+.ui-select .ui-filter input:focus{box-shadow:0 0 0 3px rgba(148,163,184,0.25)}`;
   const style = document.createElement('style'); style.id='ui-select-styles'; style.textContent = css;
   document.head.appendChild(style);
 })();
@@ -376,6 +389,57 @@ function hexToRgba(hex, a){
   const bigint = parseInt(m.length===3? m.split('').map(x=>x+x).join(''): m, 16);
   const r = (bigint>>16)&255, g=(bigint>>8)&255, b=bigint&255;
   return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+// 给自绘下拉增加“输入即过滤”功能（不改原有组件，只在下拉面板顶端插入搜索框）
+// 仅对 Fix FDA Product Code 的 Desc 下拉调用
+function attachFilterableSelect(selectEl) {
+  if (!selectEl || !(selectEl instanceof HTMLSelectElement)) return;
+  const uiRoot = selectEl.nextElementSibling;
+  if (!uiRoot || !uiRoot.classList || !uiRoot.classList.contains('ui-select')) return;
+
+  // 已经装过就不重复装
+  if (uiRoot.__hasFilter) return;
+
+  // 找到自绘菜单容器（你的自绘结构是 .ui-select__menu + 多个 .ui-option）
+  const menu = uiRoot.querySelector('.ui-select__menu');
+  if (!menu) return;
+
+  // 把搜索框插到“菜单内部”的第一行，才能跟随菜单一起显示/滚动
+  const filterWrap = document.createElement('div');
+  filterWrap.className = 'ui-filter';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Type to filter...';
+  filterWrap.appendChild(input);
+  menu.insertBefore(filterWrap, menu.firstChild);
+
+  // 记录所有选项（你的选项是 div.ui-option）
+  const items = Array.from(menu.querySelectorAll('.ui-option'));
+
+  function applyFilter() {
+    // 不再 trim；并把全角空格/不换行空格统一成普通空格，确保能匹配到
+    const term = String(input.value ?? '')
+      .replace(/\u3000/g, ' ')  // 全角空格
+      .replace(/\u00A0/g, ' ')  // 不换行空格
+      .toLowerCase();
+
+    items.forEach(it => {
+      const txt = String(it.textContent || '')
+        .replace(/\u3000/g, ' ')
+        .replace(/\u00A0/g, ' ')
+        .toLowerCase();
+      it.style.display = term ? (txt.includes(term) ? '' : 'none') : '';
+    });
+  }
+
+
+  input.addEventListener('input', applyFilter);
+
+  // 打开下拉时自动聚焦搜索框（不依赖内部开放/关闭实现）
+  uiRoot.addEventListener('click', () => setTimeout(() => input.focus(), 0));
+
+  uiRoot.__hasFilter = true;
 }
 
 function beautifyAllSelects(container, accent){
@@ -536,8 +600,11 @@ function __startConfigLoad() {
     safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.hts}?ts=${ts}`, []),
     safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.mid}?ts=${ts}`, []),
     safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.pga}?ts=${ts}`, []),
+    safeFetch(`${CONFIG_PATH}/${CONFIG_FILES.fda_map}?ts=${ts}`, []),
     safeFetch(`${CONFIG_PATH}/unit.json?ts=${ts}`, {})
-  ]).then(([rule, ruleCons, hts, mid, pga, unitCfg]) => {
+  ]).then(([rule, ruleCons, hts, mid, pga, fdaMap, unitCfg]) => {
+    window.__fdaPresetMap = Array.isArray(fdaMap) ? fdaMap : [];
+
     if (!rule) throw new Error('rule config missing');
 
     baseRuleConfig         = rule || [];
@@ -618,6 +685,9 @@ if (continueBtn) {
         ? ruleConsolidatedConfig
         : baseRuleConfig;
 
+      // 预扫描：只有当上传文件将会输出 FDAPRODUCTCODE 才会在表单里展示相关 UI
+      window.__fdaScan = await preScanFdaFromFile(currentFile);
+
       // 检测完成后再切换页面并渲染（顶部会出现 Consolidated 横幅）
       document.getElementById('upload-section')?.classList.add('hidden');
       document.getElementById('form-section')?.classList.remove('hidden');
@@ -685,6 +755,150 @@ async function detectConsolidatedShipmentFromFile(file) {
   }
 }
 
+// 预扫描：只计算本次会导出的 FDAPRODUCTCODE 与 DescOfMerchandise（不做 Error_fix/Delete_code）
+async function preScanFdaFromFile(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const wb  = XLSX.read(buf, { type:'array', password: EXCEL_PASSWORD });
+
+    // 复用生成逻辑里对各 sheet 的解析与“主行数”判定
+    const sheetData = {};
+    let mawbSheetArr = [];
+    for (const name of wb.SheetNames) {
+      const key = name.trim().toLowerCase();
+      const ws  = wb.Sheets[name];
+      if (key === 'mawb') {
+        mawbSheetArr = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+        sheetData['mawb'] = XLSX.utils.sheet_to_json(ws, { defval:'' });
+      } else {
+        sheetData[key] = XLSX.utils.sheet_to_json(ws, { defval:'' });
+      }
+    }
+
+    // AOA 视图 + 期望表头集合 + 自动识别标题行（与生成逻辑相同）
+    const sheetAOA = {};
+    for (const name of wb.SheetNames) {
+      sheetAOA[name.trim().toLowerCase()] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header:1, defval:'' });
+    }
+    const expectedHeadersBySheet = {};
+    for (const cfg of ruleConfig) {
+      if ((cfg.Source || '').toString().trim().toLowerCase() !== 'user_upload') continue;
+      const sk = (cfg.Sheet || '').toString().trim().toLowerCase();
+      const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+      if (lookup === 'keyword_right') continue;
+      const ref = (cfg.Reference || '').toString().trim();
+      if (!ref) continue;
+      (expectedHeadersBySheet[sk] ||= new Set()).add(ref);
+    }
+    const sheetViews = {};
+    Object.keys(sheetAOA).forEach(sk => {
+      const expected = Array.from(expectedHeadersBySheet[sk] || []);
+      sheetViews[sk] = buildSheetView(sheetAOA[sk], expected);
+    });
+
+    // 决定主驱动 sheet 与有效数据行数（与生成逻辑一致）
+    let mainCount = 0, primarySheetKey = null;
+    const sheetCandidates = new Set();
+    const isEmptyVal = (v) => {
+      const s = String(v ?? '').trim().toLowerCase();
+      if (!s) return true;
+      if (/^[-–—]+$/.test(s)) return true;
+      if (s === 'na' || s === 'n/a' || s === 'null') return true;
+      if (/^0+(\.0+)?$/.test(s)) return true;
+      return false;
+    };
+    const isRowEffectivelyEmpty = (row, keyIdxs) => {
+      if (!row || !Array.isArray(row) || row.length === 0) return true;
+      const cells = (keyIdxs && keyIdxs.length) ? keyIdxs.map(i => row[i]) : row;
+      return cells.every(isEmptyVal);
+    };
+    for (const cfg of ruleConfig) {
+      const src = (cfg.Source || '').toString().trim().toLowerCase();
+      if (src !== 'user_upload') continue;
+      const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+      if (lookup === 'keyword_right') continue;
+      const sk = (cfg.Sheet || '').toString().trim().toLowerCase();
+      if (!sk || sk === 'mawb') continue;
+      sheetCandidates.add(sk);
+    }
+    if (sheetCandidates.size > 0) {
+      sheetCandidates.forEach(sk => {
+        const view = sheetViews[sk];
+        const aoa  = sheetAOA[sk] || [];
+        if (view && view.headerRowIdx >= 0) {
+          const dataRows = aoa.slice(view.headerRowIdx + 1);
+          const expected = Array.from(expectedHeadersBySheet[sk] || []);
+          const headerRow = aoa[view.headerRowIdx] || [];
+          const norm = (x) => String(x ?? '').trim().toLowerCase();
+          const keyIdxs = expected
+            .map(h => headerRow.findIndex(x => norm(x) === norm(h)))
+            .filter(i => i >= 0);
+          const nonEmptyRows = dataRows.filter(row => !isRowEffectivelyEmpty(row, keyIdxs));
+          const count = nonEmptyRows.length;
+          if (count > mainCount) {
+            mainCount = count;
+            primarySheetKey = sk;
+          }
+        }
+      });
+    }
+    const main = mainCount > 0 ? new Array(mainCount).fill(0) : [];
+
+    // 扫描两列：DescOfMerchandise + FDAPRODUCTCODE（不做任何 Error_fix/Delete_code）
+    const pairs = [];
+    for (let i = 0; i < main.length; i++) {
+      const out = {};
+      for (const cfg of ruleConfig) {
+        const col = cfg.Column;
+        if (col !== 'FDAPRODUCTCODE' && col !== 'DescOfMerchandise') continue;
+        const src = (cfg.Source || '').trim().toLowerCase();
+        if (src === 'fixed') {
+          out[col] = cfg.Value || '';
+        } else if (src === 'user_upload') {
+          const sk = (cfg.Sheet || '').trim().toLowerCase();
+          const lookup = (cfg.Lookup || 'header').toString().toLowerCase();
+          let value = '';
+          if (sk === 'mawb' && cfg.Reference && (lookup === 'header' || lookup === 'singleton')) {
+            value = getValueFromMawbSheet(mawbSheetArr, cfg.Reference);
+          } else {
+            const view = sheetViews[sk];
+            if (view) {
+              value = (lookup === 'keyword_right')
+                ? view.getByKeywordRight(cfg.Reference)
+                : view.getByHeaderRow(i, cfg.Reference);
+            }
+          }
+          out[col] = parseValue(value, cfg.Parsing);
+        } else if (src === 'user_input') {
+          // user_input 与扫描无关（此两列通常不是 user_input），保留空
+        }
+      }
+      const code = (out.FDAPRODUCTCODE || '').toString();
+      const desc = (out.DescOfMerchandise || '').toString();
+      if (code) {
+        pairs.push({ row: i, desc, code });
+      }
+    }
+
+    // 精确与模糊集合
+    const descList = Array.from(new Set(pairs.map(p => p.desc)));
+    const codeList = Array.from(new Set(pairs.map(p => p.code)));
+
+    // 归一化分组（模糊去重用）：忽略空格与所有非字母数字
+    const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const groupMap = new Map();   // key = 归一化后字符串，val = Set(原始 desc)
+    descList.forEach(d => {
+      const k = norm(d);
+      (groupMap.get(k) || groupMap.set(k, new Set()).get(k)).add(d);
+    });
+
+    return { pairs, descList, codeList, groupMap };
+  } catch (e) {
+    console.warn('preScanFdaFromFile failed:', e);
+    return { pairs:[], descList:[], codeList:[], groupMap:new Map() };
+  }
+}
+
   // 生成下载
   generateBtn.addEventListener('click', () => {
     if (!currentFile) { alert('No file selected'); return; }
@@ -737,7 +951,7 @@ function renderForm(defaultMawb, { portKey = '', dateKey = '' } = {}) {
   // ===== 顶部：Replace MID with Manufacturer Name and Address 开关 + 输入框 =====
   // 容器
   const midBox = document.createElement('div');
-  midBox.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mt-2';
+  midBox.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 -mt-1';
   midBox.style.marginTop = '4px';
   midBox.style.marginBottom = '0';
 
@@ -868,7 +1082,7 @@ inputsContainer.appendChild(makeRow('', false));
       // 容器（与 MID 同风格）
       const pgaRow = document.createElement('div');
       pgaRow.id = 'row-pga-roundup';
-      pgaRow.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 mt-2';
+      pgaRow.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 -mt-1';
       pgaRow.style.marginTop = '4px';
       pgaRow.style.marginBottom = '0';
 
@@ -895,6 +1109,338 @@ inputsContainer.appendChild(makeRow('', false));
       });
     }
   } catch (_) {}
+
+  // ===== FDA Product Code 修复（只有当预扫描发现会输出 FDAPRODUCTCODE 时才展示）=====
+  (function insertFdaFixBlocks(){
+    try {
+      const scan = window.__fdaScan;
+      const hasData = scan && Array.isArray(scan.pairs) && scan.pairs.length > 0;
+      if (!hasData) return; // “不能允许UI一直出现”——没有可输出的 FDAPRODUCTCODE 时不展示
+
+      // ---------- 工具函数 ----------
+      const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+      function unique(arr){ return Array.from(new Set(arr)); }
+      function currentDescOptions(fuzzy, excludeSet){
+        if (!fuzzy) return scan.descList.filter(d => !excludeSet.has(d));
+        // 模糊：用 groupMap 的 key 作为选项文本（显示第一项 + 记数）
+        const opts = [];
+        for (const [k, set] of scan.groupMap.entries()) {
+          if (excludeSet.has(k)) continue;
+          const arr = Array.from(set);
+          const label = arr[0] + (arr.length>1 ? ` (+${arr.length-1})` : '');
+          opts.push({key:k, label, originals:arr});
+        }
+        return opts;
+      }
+
+      function buildSelect(options, placeholder='-- Select --'){
+        const sel = document.createElement('select');
+        sel.className = 'border rounded px-2 py-1 w-full';
+        sel.innerHTML = `<option value="">${placeholder}</option>` +
+          options.map(o => typeof o === 'string'
+            ? `<option value="${o}">${o}</option>`
+            : `<option value="${o.key}">${o.label}</option>`
+          ).join('');
+        return sel;
+      }
+
+      // ---------- 块一：Fix FDA Product Code（按 Desc 批量改） ----------
+      const box1 = document.createElement('div');
+      box1.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 -mt-1';
+      box1.id = 'row-fda-fix-by-desc';
+      box1.innerHTML = `
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input id="chk-fda-fix" type="checkbox" class="h-5 w-5 accent-blue-600">
+          <span class="text-slate-700 font-semibold">Fix FDA Product Code based on description</span>
+        </label>
+        <div id="fda-fix-body" class="mt-3 hidden">
+          <label class="inline-flex items-center gap-2 cursor-pointer mb-2">
+            <input id="chk-fda-fuzzy" type="checkbox" class="h-4 w-4 accent-blue-600">
+            <span>Enable fuzzy de-duplication (ignore spaces & special characters)</span>
+          </label>
+          <div id="fda-rows" class="space-y-2"></div>
+        </div>
+      `;
+      formEl.appendChild(box1);
+
+      const chkFix   = box1.querySelector('#chk-fda-fix');
+      const body1    = box1.querySelector('#fda-fix-body');
+      const chkFuzzy = box1.querySelector('#chk-fda-fuzzy');
+      const rowsDiv  = box1.querySelector('#fda-rows');
+
+      chkFix.checked = false;
+      chkFuzzy.checked = !!window.__fuzzyDedup;
+      chkFix.addEventListener('change', () => {
+        body1.classList.toggle('hidden', !chkFix.checked);
+        window.__descFixMapExact.clear();
+        window.__descFixMapByNorm.clear();
+        rowsDiv.innerHTML = '';
+
+        if (chkFix.checked) {
+          // 先放预设 => 预设显示在第一行
+          applyPresetRows();
+
+          // 如果没有任何命中预设，再补一行空行
+          if (rowsDiv.children.length === 0) addRowByDesc();
+
+          // 统一样式与过滤功能
+          beautifyAllSelects(body1);
+          body1.querySelectorAll('select').forEach(attachFilterableSelect);
+        }
+      });
+
+      chkFuzzy.addEventListener('change', () => {
+        const goingFuzzy = !!chkFuzzy.checked;
+        window.__fuzzyDedup = goingFuzzy;
+
+        // 读取现有行（仅在“切到模糊”时保留；切回精确时不保留）
+        const saved = [];
+        if (goingFuzzy) {
+          rowsDiv.querySelectorAll('.__fda-desc-row').forEach(row => {
+            const sel = row.querySelector('select');
+            const inp = row.querySelector('input.fda-code-input');
+            const code = (inp ? inp.value : '').trim();
+            const val  = sel.value || '';
+            const text = sel.options[sel.selectedIndex]?.text || val;
+            saved.push({ val, text, code });
+          });
+        }
+
+        // 清空
+        rowsDiv.innerHTML = '';
+        window.__descFixMapExact.clear();
+        window.__descFixMapByNorm.clear();
+
+        const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+
+        if (goingFuzzy) {
+          // 精确 → 模糊：把已选的“原文值(val)”归一化成 key，空值跳过
+          const mapped = saved
+            .map(({ val, code }) => {
+              if (!val) return { keyOrDesc:'', newCode: code };
+              return { keyOrDesc: norm(val), newCode: code };
+            })
+            .filter(x => x.keyOrDesc);
+
+          // 重建这些行
+          mapped.forEach(item => addRowByDesc(item.keyOrDesc, item.newCode));
+
+          // 再根据模糊规则带入预设
+          applyPresetRows();
+        } else {
+          // 模糊 → 精确：不保留任何既有选择；严格模式只按“精确命中”的预设来
+          applyPresetRows();
+        }
+
+        // 如果仍然没有任何行，再补一行空行
+        if (rowsDiv.children.length === 0) addRowByDesc();
+
+        // 统一样式与下拉过滤
+        beautifyAllSelects(body1);
+        body1.querySelectorAll('select').forEach(attachFilterableSelect);
+      });
+
+      function collectRowsByDesc(){
+        const saved = [];
+        rowsDiv.querySelectorAll('.__fda-desc-row').forEach(row => {
+          const sel = row.querySelector('select');
+          const inp = row.querySelector('input.fda-code-input'); // ← 只取右侧 10 位文本框
+          const val = sel.value;
+          const code = (inp ? inp.value : '').trim();
+          if (window.__fuzzyDedup) {
+            if (val) saved.push({ keyOrDesc: val, newCode: code });
+          } else {
+            if (val) saved.push({ keyOrDesc: val, newCode: code });
+          }
+        });
+        return saved;
+      }
+
+      function addRowByDesc(presetKeyOrDesc='', presetCode=''){
+        const selectedSet = new Set();
+        rowsDiv.querySelectorAll('.__fda-desc-row select').forEach(s => selectedSet.add(s.value));
+        const opts = currentDescOptions(window.__fuzzyDedup, selectedSet);
+
+        const row = document.createElement('div');
+        row.className = '__fda-desc-row flex items-center gap-2';
+        const sel = buildSelect(opts, '-- Select --');
+        if (presetKeyOrDesc) sel.value = presetKeyOrDesc;
+        sel.style.minWidth = '240px';
+
+        const span = document.createElement('span');
+        span.textContent = 'to';
+
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.maxLength = 10;
+        inp.className = 'ui-input fda-code-input';   // ← 新增专用 class
+        inp.value = presetCode || '';
+
+        const plus = document.createElement('button');
+        plus.type = 'button'; plus.className = 'mid-mini-btn'; plus.textContent = '+';
+
+        const minus = document.createElement('button');
+        minus.type = 'button'; minus.className = 'mid-mini-btn'; minus.textContent = '−';
+        minus.style.display = rowsDiv.children.length ? '' : 'none';
+
+        row.appendChild(sel); row.appendChild(span); row.appendChild(inp); row.appendChild(plus); row.appendChild(minus);
+        rowsDiv.appendChild(row);
+
+        // 同步为自绘下拉（与其它下拉一致的样式）
+        buildCustomSelect(sel);
+        const uiRoot = sel.nextElementSibling;      // .ui-select
+        if (uiRoot) uiRoot.style.minWidth = '240px'; // 至少与日期输入等长
+        attachFilterableSelect(sel);
+
+        function writeBack(){
+          const code = (inp.value || '').trim();
+          if (window.__fuzzyDedup) {
+            const k = sel.value;
+            if (!k) return;
+            if (code === '') window.__descFixMapByNorm.set(k, '');
+            else window.__descFixMapByNorm.set(k, code);
+          } else {
+            const d = sel.value;
+            if (!d) return;
+            if (code === '') window.__descFixMapExact.set(d, '');
+            else window.__descFixMapExact.set(d, code);
+          }
+        }
+
+        sel.addEventListener('change', writeBack);
+        inp.addEventListener('input',  writeBack);
+
+        plus.addEventListener('click', () => addRowByDesc());
+        minus.addEventListener('click', () => { row.remove(); writeBack(); });
+      }
+
+      // 预设：与配置文件匹配则自动加行并填充值（模糊逻辑与选中开关一致）
+      function applyPresetRows(){
+        if (!Array.isArray(window.__fdaPresetMap)) return;
+        const getCode = it => (it.FDAPRODUCTCODE ?? it.FDAPROGRAMCODE ?? '').toString();
+
+        const picked = new Set();
+        rowsDiv.querySelectorAll('.__fda-desc-row select').forEach(s => picked.add(s.value));
+
+        if (window.__fuzzyDedup) {
+          const bestForKey = new Map(); // gk -> { len, code }
+          for (const it of window.__fdaPresetMap) {
+            const d = (it.DescOfMerchandise || '').toString();
+            const c = getCode(it);
+            if (!d && !c) continue;
+            const k = norm(d);
+            for (const gk of scan.groupMap.keys()) {
+              if (gk.includes(k) || k.includes(gk)) {
+                const cur = bestForKey.get(gk);
+                if (!cur || k.length > cur.len) bestForKey.set(gk, { len: k.length, code: c });
+              }
+            }
+          }
+          for (const [gk, { code }] of bestForKey.entries()) {
+            if (picked.has(gk)) continue;
+            addRowByDesc(gk, code);
+            picked.add(gk);
+          }
+        } else {
+          window.__fdaPresetMap.forEach(it=>{
+            const d=(it.DescOfMerchandise||'').toString();
+            const c = getCode(it);
+            if (!d && !c) return;
+            if (!picked.has(d) && scan.descList.includes(d)) {
+              addRowByDesc(d, c);
+              picked.add(d);
+            }
+          });
+        }
+      }
+
+      // ---------- 块二：Fix Specific FDA Product Code（按 Code 替换） ----------
+      const box2 = document.createElement('div');
+      box2.className = 'col-span-2 p-4 rounded-xl border border-gray-200 bg-gray-50 -mt-1';
+      box2.id = 'row-fda-fix-by-code';
+      box2.innerHTML = `
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input id="chk-fda-fix-specific" type="checkbox" class="h-5 w-5 accent-blue-600">
+          <span class="text-slate-700 font-semibold">Fix Specific FDA Product Code</span>
+        </label>
+        <div id="fda-fix-specific-body" class="mt-3 hidden">
+          <div id="fda-code-rows" class="space-y-2"></div>
+        </div>
+      `;
+      formEl.appendChild(box2);
+
+      const chkFixSpecific = box2.querySelector('#chk-fda-fix-specific');
+      const body2          = box2.querySelector('#fda-fix-specific-body');
+      const rowsDiv2       = box2.querySelector('#fda-code-rows');
+
+      chkFixSpecific.checked = false;
+      chkFixSpecific.addEventListener('change', () => {
+        body2.classList.toggle('hidden', !chkFixSpecific.checked);
+        window.__codeFixMap.clear();
+        rowsDiv2.innerHTML = '';
+        if (chkFixSpecific.checked) addRowByCode();
+        beautifyAllSelects(body2);
+        body2.querySelectorAll('select').forEach(attachFilterableSelect);
+      });
+
+      function addRowByCode(presetOld='', presetNew=''){
+        const selected = new Set();
+        rowsDiv2.querySelectorAll('.__fda-code-row select').forEach(s => selected.add(s.value));
+        const options = scan.codeList.filter(c => !selected.has(c));
+
+        const row = document.createElement('div');
+        row.className = '__fda-code-row flex items-center gap-2';
+        const sel = buildSelect(options, '-- Select --');
+        if (presetOld) sel.value = presetOld;
+
+        const span = document.createElement('span');
+        span.textContent = 'to';
+
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.maxLength = 10;
+        inp.className = 'ui-input fda-code-input';
+        inp.value = presetNew || '';
+
+        const plus = document.createElement('button');
+        plus.type = 'button'; plus.className = 'mid-mini-btn'; plus.textContent = '+';
+
+        const minus = document.createElement('button');
+        minus.type = 'button'; minus.className = 'mid-mini-btn'; minus.textContent = '−';
+        minus.style.display = rowsDiv2.children.length ? '' : 'none';
+
+        row.appendChild(sel); row.appendChild(span); row.appendChild(inp); row.appendChild(plus); row.appendChild(minus);
+        rowsDiv2.appendChild(row);
+
+        buildCustomSelect(sel);
+        const uiRoot = sel.nextElementSibling;
+        if (uiRoot) uiRoot.style.minWidth = '240px';
+        attachFilterableSelect(sel);
+
+        function writeBack(){
+          const oldC = sel.value;
+          const newC = (inp.value || '').trim();
+          if (!oldC) return;
+          window.__codeFixMap.set(oldC, newC);
+        }
+        sel.addEventListener('change', writeBack);
+        inp.addEventListener('input',  writeBack);
+
+        plus.addEventListener('click', () => addRowByCode());
+        minus.addEventListener('click', () => { row.remove(); writeBack(); });
+      }
+
+      // 初始化：若打开“Fix FDA Product Code”，自动填充预设
+      // （按你的习惯，此处不自动勾选；用户勾选后再填充）
+      chkFix.addEventListener('change', () => {
+        if (chkFix.checked) { applyPresetRows(); }
+      });
+
+    } catch(e) {
+      console.warn('insertFdaFixBlocks failed', e);
+    }
+  })();
+
 
 
   const labels = [];
@@ -1279,10 +1825,49 @@ if (mainCount > 0) {
       }
     })();
 
+    // ==== 先应用用户自定义修复（Desc 批量 / 指定 Code 替换）====
+    (() => {
+      const orig = (out.FDAPRODUCTCODE || '').toString();
+      if (!orig) return;
+
+      let newCode = null;
+
+      // A) Fix by Desc（支持精确或模糊）
+      if (document.getElementById('chk-fda-fix')?.checked) {
+        const desc = (out.DescOfMerchandise || '').toString();
+        if (window.__fuzzyDedup && window.__descFixMapByNorm?.size) {
+          const k = (desc || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+          const entries = Array.from(window.__descFixMapByNorm.entries())
+            .filter(([kw]) => !!kw)
+            .sort((a, b) => b[0].length - a[0].length);  // 长的优先
+          for (const [kw, code] of entries) {
+            if (k.includes(kw)) { newCode = code; break; }
+          }
+        } else if (window.__descFixMapExact?.size) {
+          if (window.__descFixMapExact.has(desc)) newCode = window.__descFixMapExact.get(desc);
+        }
+      }
+
+      // B) Fix specific code（code->code）
+      if (newCode == null && document.getElementById('chk-fda-fix-specific')?.checked && window.__codeFixMap?.size) {
+        if (window.__codeFixMap.has(orig)) newCode = window.__codeFixMap.get(orig);
+      }
+
+      if (newCode != null) {
+        // 记录修改：Original_ProductCode
+        if (orig !== newCode) out.Original_ProductCode = orig;
+        out.FDAPRODUCTCODE = newCode;          // 允许置空
+        (window.__manualFdaRows ||= new Set()).add(i);   // 本行后续跳过 Error_fix/Delete_code
+      }
+    })();
+
 
     // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Anything_else + Description_contain；Error_fix 记录原始值）
     (() => {
       const rawCode = (out.FDAPRODUCTCODE || '').toString();
+      // 若该行属于“用户或自动批量改码行”，跳过后续 Error_fix / Delete_code
+      if (window.__manualFdaRows instanceof Set && window.__manualFdaRows.has(i)) return;
+
       if (!rawCode) return;
 
       // 应用规则并在发生 Error_fix 时记录原值+高亮行信息
@@ -1768,15 +2353,15 @@ function beautifyAllTextInputs(container){
     el.style.borderRadius = '12px';                    // 圆角与下拉一致
     el.style.padding = '10px 14px';                    // 与下拉近似（下拉右侧有箭头多 26px）
     el.style.background = '#fff';
-    el.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)';
+    el.style.boxShadow = '0 1px 2px rgba(16,24,40,0.05)';
     el.style.transition = 'box-shadow .15s, border-color .15s';
     el.style.outline = 'none';
     el.addEventListener('focus', () => {
-      el.style.boxShadow = '0 0 0 3px rgba(148,163,184,.25)';   // 与下拉聚焦外光一致
+      el.style.boxShadow = '0 0 0 3px rgba(148,163,184,0.25)';   // 与下拉聚焦外光一致
       el.style.borderColor = '#d1d5db';
     });
     el.addEventListener('blur',  () => {
-      el.style.boxShadow = '0 1px 2px rgba(16,24,40,.05)';
+      el.style.boxShadow = '0 1px 2px rgba(16,24,40,0.05)';
       // 如果值为空，保持红色；否则恢复灰色
       if ((el.value || '').trim() === '') {
         el.style.borderColor = 'red';
