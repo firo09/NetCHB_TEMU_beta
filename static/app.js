@@ -1886,8 +1886,8 @@ if (mainCount > 0) {
     // PGA（按 FDAPRODUCTCODE 最长前缀匹配；支持 Anything_else + Description_contain；Error_fix 记录原始值）
     (() => {
       const rawCode = (out.FDAPRODUCTCODE || '').toString();
-      // 若该行属于“用户或自动批量改码行”，跳过后续 Error_fix / Delete_code
-      if (window.__manualFdaRows instanceof Set && window.__manualFdaRows.has(i)) return;
+      // 是否人工/批量改过：只跳过 Error_fix / Delete_code，不跳过“复制其它字段”
+      const isManual = (window.__manualFdaRows instanceof Set) && window.__manualFdaRows.has(i);
 
       if (!rawCode) return;
 
@@ -1897,8 +1897,8 @@ if (mainCount > 0) {
 
         const orig = out.FDAPRODUCTCODE;
 
-        // 1) Error_fix：前缀替换（长度 = Error_fix 长度）
-        if (rule.Error_fix) {
+        // 1) Error_fix（仅非人工改码时才执行）
+        if (!isManual && rule.Error_fix) {
           const fix = String(rule.Error_fix);
           const n = fix.length;
           out.FDAPRODUCTCODE = fix + rawCode.slice(n);
@@ -1914,8 +1914,8 @@ if (mainCount > 0) {
           }
         }
 
-        // 2) Delete_code 优先级最高
-        if (rule.Delete_code === 'Y') {
+        // 2) Delete_code（仅非人工改码时才执行）
+        if (!isManual && String(rule.Delete_code).toUpperCase() === 'Y') {
           out.FDAPRODUCTCODE = '';
           Object.keys(rule).forEach(k => {
             if (!['FDAPRODUCTCODE','Delete_code','Error_fix','Description_contain'].includes(k)) {
@@ -1925,7 +1925,7 @@ if (mainCount > 0) {
           return true;
         }
 
-        // 3) 复制其它字段（跳过标识字段；仅写有值的项）
+        // 3) 复制其它字段（无论是否人工改码都要执行；仅写有值的项）
         Object.entries(rule).forEach(([k, v]) => {
           if (['FDAPRODUCTCODE','Delete_code','Error_fix','Description_contain'].includes(k)) return;
           if (v !== undefined && v !== null && v !== '') out[k] = v;
