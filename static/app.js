@@ -27,6 +27,44 @@ const CONFIG_FILES = IS_SHEIN
 // 全局保存当前文件、默认 MAWB、预选项
 let currentFile = null;
 let currentDefaultMawb = '';
+
+// === PATCH: shrinkAOA helpers ===
+function __isMeaningful(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === 'string') return v.trim() !== '';
+  if (typeof v === 'number') return !Number.isNaN(v);
+  if (v instanceof Date) return !Number.isNaN(v.getTime());
+  if (typeof v === 'boolean') return true;
+  return false;
+}
+function shrinkAOA(aoa) {
+  if (!Array.isArray(aoa) || aoa.length === 0) {
+    return { trimmedAOA: [[]], keptCols: [], oldToNew: {} };
+  }
+  const rows = aoa.map(r => Array.isArray(r) ? r : []);
+  const rowNonEmpty = rows.map(r => r.some(__isMeaningful));
+  let last = rows.length - 1;
+  while (last >= 0 && !rowNonEmpty[last]) last--;
+  const cutRows = rows.slice(0, last + 1);
+  if (cutRows.length === 0) return { trimmedAOA: [[]], keptCols: [], oldToNew: {} };
+  const maxCols = Math.max(...cutRows.map(r => r.length));
+  const colNonEmpty = new Array(maxCols).fill(false);
+  for (let c = 0; c < maxCols; c++) {
+    for (let r = 0; r < cutRows.length; r) {
+      const v = cutRows[r][c];
+      if (__isMeaningful(v)) { colNonEmpty[c] = true; break; }
+    }
+  }
+  const keptCols = [];
+  for (let c = 0; c < maxCols; c++) if (colNonEmpty[c]) keptCols.push(c);
+  if (keptCols.length === 0) keptCols.push(0);
+  const oldToNew = {};
+  keptCols.forEach((oldIdx, newIdx) => (oldToNew[oldIdx] = newIdx));
+  const trimmedAOA = cutRows.map(r => keptCols.map(c => r[c]));
+  return { trimmedAOA, keptCols, oldToNew };
+}
+
+ '';
 let selectedPortKey = '';
 let selectedDateKey = ''; // '', 'today', 'tomorrow'
 
@@ -2118,8 +2156,19 @@ if (mainCount > 0) {
 
 
   // 然后再生成 aoa 与工作表
-  const aoa = [header].concat(output.map(o => header.map(c => (o[c] ?? ''))));
-  const ws2 = XLSX.utils.aoa_to_sheet(aoa);
+  const aoa = [header].concat(
+    output.map(o => header.map(c => {
+      const v = o[c];
+      return (v === '' || v === null || v === undefined) ? undefined : v;
+    }))
+  );
+  const { trimmedAOA, keptCols, oldToNew } = shrinkAOA(aoa);
+  let ws2 = XLSX.utils.aoa_to_sheet(trimmedAOA);
+  {
+    const endRow = trimmedAOA.length > 0 ? trimmedAOA.length - 1 : 0;
+    const endCol = (trimmedAOA[0] && trimmedAOA[0].length > 0) ? trimmedAOA[0].length - 1 : 0;
+    ws2['!ref'] = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r:endRow, c:endCol } });
+  }
 
   // === 日期/时间列（按配置 Format + 列名定位，适配动态表头顺序变动）===
   (function applyDateTimeFormatsByHeader() {
@@ -2357,8 +2406,14 @@ if (mainCount > 0) {
     outFileName = outFileName.replace(/\.xlsx$/i, '_RoundedUp.xlsx');
   }
 
-  XLSX.writeFile(wb2, outFileName);
-
+  // ✅ 启用 ZIP 压缩 + 共享字符串表（重复文本更省体积）
+  // 在写文件前强制把所有文本标记为共享字符串（t:'s'）
+  normalizeSharedStrings(ws2);
+  XLSX.writeFile(
+    wb2,
+    outFileName,
+    { compression: true, bookSST: true }
+  );
 }
 
 
@@ -2429,3 +2484,23 @@ document.addEventListener('DOMContentLoaded', () => {
   if (df && typeof observeNewInputs === 'function') observeNewInputs(df, 'neutral');
 });
 
+// === PATCH: normalizeSharedStrings ===
+function normalizeSharedStrings(ws) {
+  if (!ws || typeof ws !== 'object') return;
+  // 允许多位列字母与多位行号：如 A1、Z99、AA10、BC1234
+  const isCellAddress = /^([A-Z]+)(\d+)$/;
+  for (const k in ws) {
+    if (!Object.prototype.hasOwnProperty.call(ws,k)) continue;
+    if (k[0] === '!') continue; // skip meta keys
+    if (!isCellAddress.test(k)) continue;
+    const cell = ws[k];
+    if (!cell || typeof cell !== 'object') continue;
+    const v = cell.v;
+    // If it's a string or currently tagged as 'str', force to shared string 's'
+    if (typeof v === 'string' || cell.t === 'str') {
+      cell.t = 's';
+      // Remove inline string artifacts if any
+      if (cell.is) delete cell.is;
+    }
+  }
+}
