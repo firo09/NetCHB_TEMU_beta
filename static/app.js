@@ -113,6 +113,34 @@ function attachHtsQty(row){
   if (q2) row['HTSQty2'] = q2;
 }
 
+// ===== 客户分支：数量处理策略（最小侵入） =====
+function __step_calcHtsQty(out){ attachHtsQty(out); }
+function __step_fillIfEmptyWithPcs(out){
+  const isBlank = v => v == null || String(v).trim() === '';
+  if (isBlank(out.HTSQty)) {
+    const raw = out['Manifest Qty Piece count'];
+    const pcsNum = Number(String(raw ?? '').replace(/,/g, ''));
+    if (!Number.isNaN(pcsNum)) out.HTSQty = pcsNum.toFixed(3);
+  }
+}
+function __step_roundUpIfEnabled(out){
+  if (window.__roundUpPgaQtyEnabled) {
+    const hasFda = (out.FDAPRODUCTCODE ?? '') !== '';
+    const qtyNum = Number(String(out.HTSQty ?? '').replace(/,/g, ''));
+    if (hasFda && isFinite(qtyNum) && qtyNum < 1) out.HTSQty = 1;
+  }
+}
+// 策略表：按客户名选择“计算→兜底→是否 <1→1”
+const __qtyPipelines = {
+  // 默认：保留原三步
+  DEFAULT(out){ __step_calcHtsQty(out); __step_fillIfEmptyWithPcs(out); __step_roundUpIfEnabled(out); },
+  // SHEIN：跳过“计算/兜底”，仅保留由前端按钮控制的 <1→1
+  SHEIN(out){ __step_roundUpIfEnabled(out); },
+};
+function runQtyPipeline(out, customer){
+  const key = String(customer||'').toUpperCase();
+  (__qtyPipelines[key] || __qtyPipelines.DEFAULT)(out);
+}
 
 // ==== 新增：是否 TEMU（留好多客户扩展位）====
 const IS_TEMU = (typeof IS_SHEIN !== 'undefined') ? !IS_SHEIN : true;
@@ -676,14 +704,8 @@ if (document.readyState === 'loading') {
     const base = currentFile.name.replace(/\.(xlsx|xls|csv)$/i, '');
 
     // 支持两种：11位；或 3位-8位（去掉连字符）
-    let m = base.match(/(\d{11})$/);
-    if (!m) {
-      const m2 = base.match(/(\d{3})-(\d{8})$/);
-      if (m2) currentDefaultMawb = m2[1] + m2[2];
-      else    currentDefaultMawb = '';
-    } else {
-      currentDefaultMawb = m[1];
-    }
+    const m3 = base.match(/(\d{3})[-_]?(\d{8})(?!\d)/) || base.match(/(\d{11})(?!\d)/);
+    currentDefaultMawb = m3 ? (m3[2] ? m3[1] + m3[2] : m3[1]) : '';
 
     continueBtn && (continueBtn.disabled = false);
 
@@ -1770,6 +1792,8 @@ if (mainCount > 0) {
   // reset Error_fix hits for this run
   window.__errorFixRows = [];
 
+  // ✅ 只设一次客户端标识，供数量分支使用
+  window.__client = getClientId();   // 返回 'shein' 或 'temu'
 
   for (let i = 0; i < main.length; i++) {
     const out = {};
@@ -2047,51 +2071,8 @@ if (mainCount > 0) {
       }
     })();
 
-
-    // —— 基于主驱动 sheet 的真实行判空，整行仅空白或0就跳过（避免尾部空壳行） ——
-    (function skipIfPrimaryRowEmpty() {
-      const view = sheetViews[primarySheetKey];
-      if (!view || view.headerRowIdx < 0) return; // 没识别到主表就不拦
-
-      const aoa = sheetAOA[primarySheetKey] || [];
-      const row = aoa[view.headerRowIdx + 1 + i] || [];   // 定位真实数据行
-
-      // evaluate emptiness based on primary key columns if available
-      const keyIdxs = (window.__primaryKeyIdxs && window.__primaryKeyIdxs.length)
-        ? window.__primaryKeyIdxs : null;
-      const isEmpty = isRowEffectivelyEmpty(row, keyIdxs);
-
-      if (isEmpty) {
-        window.__skipRow = true;
-      }
-    })();
-    if (window.__skipRow) { window.__skipRow = false; continue; }
-
-    // 基于主列 HTS + GrossWeight/Manifest Qty Piece count，计算两个数量（没列名时不会写出）
-    attachHtsQty(out);
+    output.push(out); // <-- ADD: collect row for export
     
-    // —— 新增：单位转换兜底 ——
-    // 若 HTSQty 为空（比如该 HTS 在 unit.json 没匹配到单位），则用 PCS 填充
-    (function fillHtsQtyWithPcsIfEmpty(){
-      const isBlank = v => v == null || String(v).trim() === '';
-      if (isBlank(out.HTSQty)) {
-        const raw = out['Manifest Qty Piece count'];
-        const pcsNum = Number(String(raw ?? '').replace(/,/g, '')); // 转成数字
-        if (!Number.isNaN(pcsNum)) {
-          out.HTSQty = pcsNum.toFixed(3); // 保持三位小数格式，和 attachHtsQty 计算一致
-        }
-      }
-    })();
-
-    // 若勾选“Auto-adjust PGA QTY...”：FDAPRODUCTCODE 有值且 HTSQty < 1 的行，把 HTSQty 调为 1
-    if (window.__roundUpPgaQtyEnabled) {
-      const hasFda = (out.FDAPRODUCTCODE ?? '') !== '';
-      const qtyNum = Number(String(out.HTSQty ?? '').replace(/,/g, ''));
-      if (hasFda && isFinite(qtyNum) && qtyNum < 1) out.HTSQty = 1;
-    }
-    
-    output.push(out);
-
     if ((i + 1) % 20 === 0 || i === main.length - 1) {
       const pct = Math.round(((i + 1) / main.length) * 100);
       pt.innerText = `${pct}%`; prog.style.width = `${pct}%`;
@@ -2105,8 +2086,18 @@ if (mainCount > 0) {
   {
     const needGrouping = IS_SHEIN || window.__isConsolidatedShipment;
     if (needGrouping) {
+      // 在分组前缓存已有 GroupIdentifier，分组后仅在空时写回，确保“已有就不覆盖”
+      for (const row of output) {
+        const given = row.GroupIdentifier ?? row.group_identifier ?? '';
+        row.__givenGroupIdentifier = String(given).trim();
+      }
       // TEMU-合单 → House 约束；SHEIN（非合单）→ 均匀分组
       applySheinGrouping(output, { respectHouseAwb: !!window.__isConsolidatedShipment });
+      // 分组后尊重已有值
+      for (const row of output) {
+        if (row.__givenGroupIdentifier) row.GroupIdentifier = row.__givenGroupIdentifier;
+        delete row.__givenGroupIdentifier;
+      }
     }
   }
 
@@ -2503,4 +2494,4 @@ function normalizeSharedStrings(ws) {
       if (cell.is) delete cell.is;
     }
   }
-}
+} 
