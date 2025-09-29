@@ -132,7 +132,7 @@
     "Reference": "FDAPRODUCTCODE",
     "Sheet": "Result",
     "Label": "",
-    "Parsing": "",
+    "Parsing": "left(7)",
     "Format": "",
     "allow_input": "",
     "has_dropdown": "",
