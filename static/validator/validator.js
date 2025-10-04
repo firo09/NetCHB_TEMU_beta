@@ -222,7 +222,11 @@ function insertResultAndDownload(resultMap) {
   const wb = XLSX.utils.book_new();
   const sheetName = state.sheetNames[state.sheetIndex] || "Sheet1";
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  const fname = `validated_${sheetName}_${new Date().toISOString().slice(0,16).replace(/[:T]/g,'-')}.xlsx`;
+  const now = new Date(); // 本机系统时区
+  const pad = n => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const fname = `validated_${sheetName}_${stamp}.xlsx`;
+
   const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   saveAs(new Blob([wbout], { type: "application/octet-stream" }), fname);
 }
