@@ -1,4 +1,6 @@
 Flask>=2.0
 gunicorn
 openpyxl
+flask-cors
+requests
 # （如果你用到 PapaParse、Tailwind、Flatpickr CDN，可不写在这儿）
