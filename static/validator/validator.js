@@ -199,34 +199,63 @@ function renderDropZoneSuccess(filename) {
 
 // 在选中列右侧插入 Result，并下载
 function insertResultAndDownload(resultMap) {
-  const aoa = state.aoa.map(row => row.slice());
-  const rHead = state.headerRow - 1;
-  const insertCol = state.chosenColIdx + 1;
-
-  const width = aoa.reduce((mx, r) => Math.max(mx, r.length), 0);
-  for (const r of aoa) while (r.length < width + 1) r.push("");
-
-  for (let i = 0; i < aoa.length; i++) {
-    aoa[i].splice(insertCol, 0, "");
-  }
-  aoa[rHead][insertCol] = "Result";
-
-  for (let i = rHead + 1; i < aoa.length; i++) {
-    const raw = String( (aoa[i][state.chosenColIdx] ?? "") ).trim().toUpperCase();
-    if (!raw) { aoa[i][insertCol] = ""; continue; }
-    if (!CODE_RE.test(raw)) { aoa[i][insertCol] = "Invalid"; continue; }
-    aoa[i][insertCol] = resultMap[raw] || "";
-  }
-
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  const wb = XLSX.utils.book_new();
   const sheetName = state.sheetNames[state.sheetIndex] || "Sheet1";
+  // 克隆原 sheet（避免直接改 state.wb）
+  const wsOrig = state.wb.Sheets[sheetName];
+  const ws = JSON.parse(JSON.stringify(wsOrig)); // 简易深拷贝
+
+  // 计算插入列（0-based）：选中列的右侧
+  const insertC = state.chosenColIdx + 1;
+  const headR = state.headerRow - 1;
+
+  // 解析并扩展 !ref（右边列数 +1）
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  range.e.c += 1;
+  ws["!ref"] = XLSX.utils.encode_range(range);
+
+  // 1) 先把所有 c >= insertC 的单元格整体右移 1 列
+  const keys = Object.keys(ws).filter(k => k[0] !== "!");
+  // 为避免覆盖，从右往左移动
+  keys.sort((a, b) => {
+    const ca = XLSX.utils.decode_cell(a), cb = XLSX.utils.decode_cell(b);
+    if (ca.r !== cb.r) return cb.r - ca.r;
+    return cb.c - ca.c;
+  });
+  for (const k of keys) {
+    const addr = XLSX.utils.decode_cell(k);
+    if (addr.c >= insertC) {
+      const nk = XLSX.utils.encode_cell({ r: addr.r, c: addr.c + 1 });
+      ws[nk] = ws[k];
+      delete ws[k];
+    }
+  }
+
+  // 2) 写入表头 "Result"
+  ws[XLSX.utils.encode_cell({ r: headR, c: insertC })] = { t: "s", v: "Result" };
+
+  // 3) 从数据区写入结果（字符串），空白保持空
+  for (let r = headR + 1; r <= range.e.r; r++) {
+    const src = XLSX.utils.encode_cell({ r, c: state.chosenColIdx });
+    let raw = ws[src]?.v;
+    // 读取展示文本优先（若有），否则读 v
+    if (ws[src] && typeof ws[src].w === "string") raw = ws[src].w;
+    const val = String(raw ?? "").trim().toUpperCase();
+    let out = "";
+    if (val) {
+      if (CODE_RE.test(val)) out = resultMap[val] || "";
+      else out = "Invalid";
+    }
+    const dst = XLSX.utils.encode_cell({ r, c: insertC });
+    ws[dst] = { t: "s", v: out };
+  }
+
+  // 4) 生成新工作簿并下载（保留了原单元格的 number format 等）
+  const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  const now = new Date(); // 本机系统时区
+  const now = new Date();
   const pad = n => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const fname = `validated_${sheetName}_${stamp}.xlsx`;
-
   const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   saveAs(new Blob([wbout], { type: "application/octet-stream" }), fname);
 }
