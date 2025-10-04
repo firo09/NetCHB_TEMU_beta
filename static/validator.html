@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Product Code Validator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+
+  <!-- 样式（与现有站点一致） -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 注意：CSS 路径指向 /static/validator/validator.css -->
+  <link rel="stylesheet" href="./validator/validator.css"/>
+
+  <!-- 本页用到的库 -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+  <main class="flex items-center justify-center py-12">
+    <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-4xl">
+      <h1 class="text-3xl md:text-4xl font-bold text-center text-slate-800 mb-8">Product Code Validator</h1>
+
+      <!-- 上传区：单一入口（点击=选择文件；拖拽=解析） -->
+      <section class="space-y-4">
+        <!-- 隐藏的文件 input（由 drop-zone 触发） -->
+        <input id="file-input" type="file" accept=".xlsx,.xls" class="sr-only"/>
+
+        <!-- 可点击 + 可拖拽 -->
+        <div id="drop-zone"
+             class="cursor-pointer border-2 border-dashed border-slate-300 rounded-xl p-8 text-center
+                    text-slate-600 hover:border-slate-400 select-none">
+          <div class="text-lg font-semibold mb-1">Click or drop an Excel file</div>
+          <div class="text-xs text-slate-500">.xls or .xlsx</div>
+        </div>
+
+        <!-- 选择 Sheet + Continue -->
+        <div class="flex items-center gap-4">
+          <select id="sheet-select" class="ui-select border rounded-xl px-3 py-2 text-slate-700 disabled:opacity-50" disabled></select>
+          <button id="btn-continue" class="px-5 py-2 rounded-2xl bg-blue-600 text-white font-semibold shadow disabled:opacity-40" disabled>Continue</button>
+        </div>
+      </section>
+
+      <hr class="my-6"/>
+
+      <!-- Header 行选择 -->
+      <section class="space-y-3">
+        <label class="block text-slate-700 font-semibold">Header row:</label>
+        <div class="flex items-center gap-4">
+          <select id="header-row-select" class="ui-select border rounded-xl px-3 py-2 text-slate-700 disabled:opacity-50" disabled></select>
+
+          <label class="inline-flex items-center gap-2">
+            <input id="custom-row-check" type="checkbox" class="accent-blue-600">
+            <span class="text-slate-700">Use custom row number</span>
+          </label>
+
+          <div class="flex-1">
+            <input id="custom-row-input" type="text" inputmode="numeric" pattern="\\d+" placeholder="Digits only"
+                   class="w-full border rounded-xl px-3 py-2 text-slate-700 bg-slate-50 disabled:opacity-50" disabled/>
+            <p id="custom-row-error" class="text-xs text-red-600 mt-1 hidden">Digits only. No special characters.</p>
+          </div>
+        </div>
+      </section>
+
+      <hr class="my-6"/>
+
+      <!-- 列选择（默认自动选中命中最多的列，按钮在 Continue 后点亮） -->
+      <section class="space-y-3">
+        <label class="block text-slate-700 font-semibold">Data source column:</label>
+        <select id="column-select" class="ui-select border rounded-xl px-3 py-2 text-slate-700 disabled:opacity-50" disabled></select>
+      </section>
+
+      <hr class="my-6"/>
+
+      <!-- 按钮在左 + 进度条在右 -->
+      <section class="flex items-center gap-4 justify-start">
+        <button id="btn-generate"
+                class="px-5 py-2 rounded-xl bg-emerald-600 text-white font-semibold shadow disabled:opacity-40"
+                disabled>
+          Generate & Download
+        </button>
+
+        <!-- 固定宽度的进度条容器（初始隐藏） -->
+        <div id="progress" class="hidden w-72 md:w-80">
+          <div class="flex items-center justify-between text-xs text-slate-600 mb-1">
+            <span id="progress-label">Preparing…</span>
+            <span id="progress-percent">0%</span>
+          </div>
+          <div class="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+            <div id="progress-bar" class="h-2 bg-blue-600 rounded-full" style="width:0%"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 注意：JS 路径指向 /static/validator/validator.js -->
+  <script src="./validator/validator.js"></script>
+</body>
+</html>
