@@ -6,7 +6,7 @@ import requests
 bp = Blueprint("validator_api", __name__, url_prefix="/api")
 
 # 位置规则：前两位数字，第3位字母，第4/5位不得为数字（可为字母或 -），后两位数字，长度=7
-CODE_RE = re.compile(r"^\d{2}[A-Za-z][A-Za-z-]{2}\d{2}$")
+const CODE_RE = /^.{7}$/;
 
 # 环境变量（Heroku Config Vars）
 AUTH_USER = os.environ.get("AUTHORIZATION_USER") or os.environ.get("AUTH_USER")
@@ -94,6 +94,10 @@ def validate_codes():
     if not isinstance(codes, list):
         return jsonify({"error": "codes_must_be_list"}), 400
 
+    # Optional guard: limit codes per request to keep within platform timeouts
+    MAX_PER = int(os.environ.get("MAX_CODES_PER_REQUEST", "120"))
+    if len(codes) > MAX_PER:
+        return jsonify({"error": "too_many_codes", "max": MAX_PER, "count": len(codes)}), 413
     results, errors = {}, {}
 
     # 预清洗+本地规则二次校验（双保险）

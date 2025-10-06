@@ -6,6 +6,7 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   wb: null,
+  fileName: "",       // 上传的原始文件名（含扩展名）
   sheetNames: [],
   sheetIndex: 0,
   aoa: [],            // 当前 sheet 的 AOA
@@ -29,9 +30,9 @@ function keywordScore(s) {
   return score;
 }
 
-// 本地合法性正则（大小写不敏感：调用处统一转大写）
-// 规则：前两位数字，第3位字母，第4/5位不得为数字（可为字母或 -），后两位数字
-const CODE_RE = /^\d{2}[A-Za-z][A-Za-z-]{2}\d{2}$/;
+// 预校验放宽：仅要求去空白后的字符串长度等于 7（大小写不敏感：调用处统一转大写）
+// 继续沿用变量名 CODE_RE，便于最小改动；含任意字符
+const CODE_RE = /^.{7}$/;
 
 // —— 统一门控：任何时候都用它来决定按钮是否可点 —— //
 function gateGenerate() {
@@ -73,6 +74,13 @@ function loadAOA(sheetName) {
   const ws = state.wb.Sheets[sheetName];
   const opts = { header: 1, blankrows: false, raw: true, defval: "" };
   state.aoa = XLSX.utils.sheet_to_json(ws, opts);
+}
+
+// 从文件名提取“安全的”基础名：去扩展名，替换非法字符
+function safeBaseFromFileName(name) {
+  const s = String(name || "");
+  const base = s.replace(/\.[^.]+$/,"");                 // 去最后一个扩展名
+  return (base || "workbook").replace(/[\\\/:*?"<>|]+/g, "_").trim();
 }
 
 // 解析候选表头行（启发式）
@@ -242,7 +250,8 @@ function insertResultAndDownload(resultMap) {
     const val = String(raw ?? "").trim().toUpperCase();
     let out = "";
     if (val) {
-      if (CODE_RE.test(val)) out = resultMap[val] || "";
+      // 仅当长度!=7时才标记 Invalid；长度==7但后端无返回 → 输出空字符串
+      if (val.length === 7) out = resultMap[val] || "";
       else out = "Invalid";
     }
     const dst = XLSX.utils.encode_cell({ r, c: insertC });
@@ -255,7 +264,8 @@ function insertResultAndDownload(resultMap) {
   const now = new Date();
   const pad = n => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const fname = `validated_${sheetName}_${stamp}.xlsx`;
+  const base = safeBaseFromFileName(state.fileName) || sheetName;
+  const fname = `validated_${base}_${stamp}.xlsx`;
   const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   saveAs(new Blob([wbout], { type: "application/octet-stream" }), fname);
 }
@@ -296,6 +306,7 @@ function insertResultAndDownload(resultMap) {
     try {
       const data = await file.arrayBuffer();
       state.wb = XLSX.read(data, { type: "array" });
+      state.fileName = file.name || "";
     } catch (e) {
       alert("Failed to read the file. Please try another Excel file.");
       renderDropZoneDefault(); // 失败则回退视觉
@@ -343,9 +354,9 @@ function insertResultAndDownload(resultMap) {
   fileInput.addEventListener("change", async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    // ☆ 关键：先上锁（同步禁用按钮），再去异步读取
-    lockBeforeUpload(f.name);
+    // 先复位，再切“Uploading…”，避免视觉被 reset 覆盖
     resetAll(false);            // 不清 file-input 自身，但会清状态并再 gate 一次
+    lockBeforeUpload(f.name);
     await handleFile(f);
   });
 
@@ -360,9 +371,9 @@ function insertResultAndDownload(resultMap) {
       gateGenerate();
       return;
     }
-    // ☆ 关键：先上锁（同步禁用按钮），再去异步读取
-    lockBeforeUpload(f.name);
+    // 先复位，再切“Uploading…”
     resetAll(true);             // 清状态
+    lockBeforeUpload(f.name);
     await handleFile(f);
   });
 
@@ -509,7 +520,7 @@ function insertResultAndDownload(resultMap) {
     $("column-select").innerHTML = ""; $("column-select").disabled = true;
     $("btn-generate").disabled = true;
 
-    state.wb = null; state.sheetNames = []; state.sheetIndex = 0;
+    state.wb = null; state.fileName = ""; state.sheetNames = []; state.sheetIndex = 0;
     state.aoa = []; state.headerCandidates = []; state.headerRow = null;
     state.headerCols = []; state.chosenColIdx = null;
 
@@ -545,31 +556,44 @@ async function onGenerate() {
     const uniq = new Set();
     for (const v of values) {
       const s = v.toUpperCase();
-      if (s && CODE_RE.test(s)) uniq.add(s);
+      if (s && s.length === 7) uniq.add(s);
     }
     progress.set(30, `Found ${uniq.size} unique code(s)`);
 
     // Step 3: 请求后端（期间缓慢自增到 70%）
     progress.trickle(70, "Validating on server…", 1, 250);
-    const payload = { codes: Array.from(uniq) };
-    const resp = await fetch("/api/validate-codes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    }).catch(() => null);
 
-    if (!resp || !resp.ok) {
-      progress.hide();
-      setBusy(false);
-      gateGenerate();
-      alert("Server returned an error. Please try again later.");
-      return;
+    // Batch validate to avoid server timeouts
+    const uniqArr = Array.from(uniq);
+    const BATCH = 60;
+    let mergedResults = {};
+    let mergedErrors = {};
+    for (let i = 0; i < uniqArr.length; i += BATCH) {
+      const chunk = uniqArr.slice(i, i + BATCH);
+      const done = Math.min(70, Math.round(30 + (i / Math.max(1, uniqArr.length)) * 40));
+      progress.set(done, `Validating ${i + 1}-${Math.min(i + BATCH, uniqArr.length)} / ${uniqArr.length}…`);
+
+      const resp = await fetch("/api/validate-codes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codes: chunk }),
+      }).catch(() => null);
+
+      if (!resp || !resp.ok) {
+        progress.hide();
+        setBusy(false);
+        gateGenerate();
+        alert("Server returned an error. Please try again later.");
+        return;
+      }
+      const data = await resp.json();
+      if (data && data.results) Object.assign(mergedResults, data.results);
+      if (data && data.errors)  Object.assign(mergedErrors,  data.errors);
     }
-    const data = await resp.json();
     progress.set(85, "Writing results…");
 
     // Step 4: 写回并导出
-    const map = data.results || {};
+    const map = mergedResults;
     insertResultAndDownload(map);
 
     // Step 5: 完成
