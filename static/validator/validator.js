@@ -1,7 +1,3 @@
-/* validator.js
- * 说明：所有对用户可见的文本/报错均为英文；仅注释使用中文。
- */
-
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -30,6 +26,10 @@ function keywordScore(s) {
   return score;
 }
 
+function sanitize(v) {
+  return String(v ?? "").toUpperCase().replace(/\s+/g, "").trim();
+}
+
 // 预校验放宽：仅要求去空白后的字符串长度等于 7（大小写不敏感：调用处统一转大写）
 // 继续沿用变量名 CODE_RE，便于最小改动；含任意字符
 const CODE_RE = /^.{7}$/;
@@ -52,7 +52,7 @@ function renderDropZoneUploading(filename = "") {
   dz.classList.add("bg-slate-50","border-slate-400");
   dz.innerHTML = `
     <div class="flex items-center justify-center gap-2">
-      <svg class="animate-spin h-4 w-4 text-slate-600" viewBox="0 0 24 24">
+      <svg class="animate-spin h-4 w-4 text-emerald-600" viewBox="0 0 24 24">
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
       </svg>
@@ -154,9 +154,17 @@ const progress = (() => {
     box.classList.add("hidden");
     stop();
     set(0, "Preparing…");
+    // 强制复位到 0（因为 set() 已变成只增不减）
+    cur = 0;
+    bar.style.width = "0%";
+    percent.textContent = "0%";
+    label.textContent = "Preparing…";
   }
   function set(p, text) {
-    cur = Math.max(0, Math.min(100, p));
+    // 单调递增：防止 trickle 和手动 set 交错导致“倒退”
+    const next = Math.max(0, Math.min(100, p));
+    if (next < cur) { if (text) label.textContent = text; return; }
+    cur = next;
     bar.style.width = cur + "%";
     percent.textContent = Math.round(cur) + "%";
     if (text) label.textContent = text;
@@ -247,12 +255,23 @@ function insertResultAndDownload(resultMap) {
     let raw = ws[src]?.v;
     // 读取展示文本优先（若有），否则读 v
     if (ws[src] && typeof ws[src].w === "string") raw = ws[src].w;
-    const val = String(raw ?? "").trim().toUpperCase();
+    const upper   = String(raw ?? "").toUpperCase();
+    const cleaned = upper.replace(/\s+/g, "").trim();
     let out = "";
-    if (val) {
-      // 仅当长度!=7时才标记 Invalid；长度==7但后端无返回 → 输出空字符串
-      if (val.length === 7) out = resultMap[val] || "";
-      else out = "Invalid";
+    if (cleaned) {
+     if (cleaned.length === 7) out = resultMap[cleaned] || "";
+     else out = "Invalid";
+    }
+    // 只要 Valid 就强制写回，并清理公式/格式/样式/缓存，避免“视觉空格”
+    if (out === "Valid" && cleaned) {
+      const cell = ws[src] || {};
+      cell.t = "s";
+      cell.v = cleaned;
+      if (cell.w !== undefined) delete cell.w; // 显示缓存
+      if (cell.f !== undefined) delete cell.f; // 公式
+      if (cell.z !== undefined) delete cell.z; // 数字/自定义格式
+      if (cell.s !== undefined) delete cell.s; // 样式（可能含缩进）
+      ws[src] = cell;
     }
     const dst = XLSX.utils.encode_cell({ r, c: insertC });
     ws[dst] = { t: "s", v: out };
@@ -555,7 +574,7 @@ async function onGenerate() {
     // Step 2: 本地初筛 + 去重
     const uniq = new Set();
     for (const v of values) {
-      const s = v.toUpperCase();
+      const s = sanitize(v);
       if (s && s.length === 7) uniq.add(s);
     }
     progress.set(30, `Found ${uniq.size} unique code(s)`);
@@ -570,7 +589,9 @@ async function onGenerate() {
     let mergedErrors = {};
     for (let i = 0; i < uniqArr.length; i += BATCH) {
       const chunk = uniqArr.slice(i, i + BATCH);
-      const done = Math.min(70, Math.round(30 + (i / Math.max(1, uniqArr.length)) * 40));
+      const processed = Math.min(i + chunk.length, uniqArr.length); // 已完成数量
+      const done = Math.min(70, Math.round(30 + (processed / Math.max(1, uniqArr.length)) * 40));
+      progress.stop(); // 此刻以手动为准，避免和 trickle 同时改数值
       progress.set(done, `Validating ${i + 1}-${Math.min(i + BATCH, uniqArr.length)} / ${uniqArr.length}…`);
 
       const resp = await fetch("/api/validate-codes", {

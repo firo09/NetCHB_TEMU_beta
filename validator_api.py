@@ -34,8 +34,8 @@ def _cache_set(code, value):
             if i % 10 == 0:
                 _cache.pop(k, None)
 
-def _clean_code(s):  # 统一大写
-    return (s or "").strip().upper()
+def _clean_code(s):  # 去空白并统一大写（与前端 sanitize 对齐）
+    return re.sub(r"\s+", "", (s or "").upper()).strip()
 
 def _hit_fda(code):
     """调用 FDA 校验一个 code，返回 'Valid' / 'Invalid' / ('error','原因')"""
