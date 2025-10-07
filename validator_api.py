@@ -5,8 +5,8 @@ import requests
 
 bp = Blueprint("validator_api", __name__, url_prefix="/api")
 
-# 位置规则：前两位数字，第3位字母，第4/5位不得为数字（可为字母或 -），后两位数字，长度=7
-const CODE_RE = /^.{7}$/;
+# 规则：长度=7
+CODE_RE = re.compile(r"^.{7}$")
 
 # 环境变量（Heroku Config Vars）
 AUTH_USER = os.environ.get("AUTHORIZATION_USER") or os.environ.get("AUTH_USER")
@@ -123,3 +123,4 @@ def validate_codes():
                 results[code] = val
 
     return jsonify({"results": results, "errors": errors})
+
