@@ -62,6 +62,27 @@ function renderDropZoneUploading(filename = "") {
   `;
 }
 
+// === PATCH: normalizeSharedStrings (to enable shared string table for better compression) ===
+function normalizeSharedStrings(ws) {
+  if (!ws || typeof ws !== 'object') return;
+  // Support multi-letter columns and multi-digit rows: e.g., A1, Z99, AA10, BC1234
+  const isCellAddress = /^([A-Z])(\d)$/;
+  for (const k in ws) {
+    if (!Object.prototype.hasOwnProperty.call(ws, k)) continue;
+    if (k[0] === '!') continue; // skip meta keys
+    if (!isCellAddress.test(k)) continue;
+    const cell = ws[k];
+    if (!cell || typeof cell !== 'object') continue;
+    const v = cell.v;
+    // If it's a string or currently tagged as 'str', force to shared string 's'
+    if (typeof v === 'string' || cell.t === 'str') {
+      cell.t = 's';
+      // Remove inline-rich-text artifacts if any
+      if (cell.is) delete cell.is;
+    }
+  }
+}
+
 // Excel 列号 -> 字母
 function colLetter(n) {
   let s = "", x = n + 1;
@@ -280,12 +301,15 @@ function insertResultAndDownload(resultMap) {
   // 4) 生成新工作簿并下载（保留了原单元格的 number format 等）
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+  // Ensure strings are stored as shared strings to improve compression
+  normalizeSharedStrings(ws);
   const now = new Date();
   const pad = n => String(n).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const base = safeBaseFromFileName(state.fileName) || sheetName;
   const fname = `validated_${base}_${stamp}.xlsx`;
-  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array", compression: true, bookSST: true });
   saveAs(new Blob([wbout], { type: "application/octet-stream" }), fname);
 }
 
