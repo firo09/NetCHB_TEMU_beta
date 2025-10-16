@@ -2071,6 +2071,7 @@ if (mainCount > 0) {
       }
     })();
 
+    runQtyPipeline(out, window.__client);
     output.push(out); // <-- ADD: collect row for export
     
     if ((i + 1) % 20 === 0 || i === main.length - 1) {
@@ -2494,4 +2495,5 @@ function normalizeSharedStrings(ws) {
       if (cell.is) delete cell.is;
     }
   }
+
 } 
