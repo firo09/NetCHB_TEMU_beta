@@ -135,7 +135,7 @@ const __qtyPipelines = {
   // 默认：保留原三步
   DEFAULT(out){ __step_calcHtsQty(out); __step_fillIfEmptyWithPcs(out); __step_roundUpIfEnabled(out); },
   // SHEIN：跳过“计算/兜底”，仅保留由前端按钮控制的 <1→1
-  SHEIN(out){ __step_roundUpIfEnabled(out); },
+  SHEIN(out){ __step_calcHtsQty(out); __step_fillIfEmptyWithPcs(out); __step_roundUpIfEnabled(out); },
 };
 function runQtyPipeline(out, customer){
   const key = String(customer||'').toUpperCase();
@@ -2497,3 +2497,4 @@ function normalizeSharedStrings(ws) {
   }
 
 } 
+
